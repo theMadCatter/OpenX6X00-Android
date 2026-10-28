@@ -4,14 +4,21 @@
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.ui.screens
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -21,7 +28,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import radio.kd0cq.x6100.net.PanelMode
@@ -56,6 +67,8 @@ fun ControlsScreen(viewModel: RadioViewModel) {
         } else if (control.mine) {
             OutlinedButton(onClick = { viewModel.releaseControl() }) { Text("Give control back") }
         }
+
+        TransmitSection(viewModel, role.canOperate)
 
         val s = state
         Text(s?.let { "${it.freqHz} Hz  ${it.modeLabel}" } ?: "no state yet",
@@ -123,6 +136,103 @@ fun ControlsScreen(viewModel: RadioViewModel) {
             fontFamily = FontFamily.Monospace,
         )
     }
+}
+
+/**
+ * The key.
+ *
+ * It is press-and-hold, because that is what the radio's own page is: a press is a lease the app renews
+ * once a second, so a phone that stops renewing — dropped link, killed service, this screen gone — is
+ * off the air within three seconds on the Panel path and within half a second on the audio path, and the
+ * app lets go at once rather than waiting for either. The button releases in a `finally`, so a pointer
+ * that never lifts cleanly, a rotation, or a screen disposed mid-call cannot leave the transmitter
+ * holding.
+ *
+ * The switch under it picks the microphone: at the radio (a Panel lease, no permission, the default) or
+ * in this phone (TCI audio, which needs RECORD_AUDIO and refuses to key without it — the radio's own
+ * microphone is never quietly substituted).
+ */
+@Composable
+private fun TransmitSection(viewModel: RadioViewModel, enabled: Boolean) {
+    val keyed by viewModel.pttKeyed.collectAsState()
+    val refusal by viewModel.pttRefusal.collectAsState()
+    val audio by viewModel.audioRunning.collectAsState()
+    val audioProblem by viewModel.audioProblem.collectAsState()
+    val fromPhone = viewModel.transmitAudioFromPhone
+
+    /** The grant's answer, kept here because it is this screen's news and not the key's. */
+    var refused by remember { mutableStateOf(false) }
+    val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        // Refused is not fatal: the switch stays where it was and the lease path keys with the radio's
+        // own microphone. It is shown, because a silent refusal to key is the thing an operator cannot
+        // debug.
+        refused = !granted
+        if (granted) viewModel.transmitAudioFromPhone = true
+    }
+
+    Text("Transmit", style = MaterialTheme.typography.titleMedium)
+    Button(
+        onClick = { },
+        enabled = enabled,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (keyed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            contentColor = if (keyed) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
+        ),
+        modifier = Modifier.fillMaxWidth().height(88.dp).pointerInput(enabled) {
+            if (!enabled) return@pointerInput
+            detectTapGestures(onPress = {
+                viewModel.pressPtt()
+                try {
+                    tryAwaitRelease()
+                } finally {
+                    viewModel.releasePtt()
+                }
+            })
+        },
+    ) {
+        Text(if (keyed) "ON AIR" else "PTT", style = MaterialTheme.typography.titleLarge)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            if (audio) "audio 24 kHz" else "audio stopped",
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
+        Text(
+            if (fromPhone) "mic: this phone" else "mic: at the radio",
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+    if (refused) {
+        Text(
+            "no microphone permission: the key still works, with the microphone at the radio",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    (refusal ?: audioProblem)?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("Transmit audio from this phone", style = MaterialTheme.typography.bodyMedium)
+        Switch(
+            checked = fromPhone,
+            enabled = enabled,
+            onCheckedChange = { want ->
+                if (want && !viewModel.hasMicrophonePermission()) {
+                    askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    viewModel.transmitAudioFromPhone = want
+                }
+            },
+        )
+    }
+    Text(
+        "The key lets go on its own at 170 s on the air, when the link drops, when someone else takes " +
+            "the controls, and the moment this app leaves the foreground.",
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 @Composable

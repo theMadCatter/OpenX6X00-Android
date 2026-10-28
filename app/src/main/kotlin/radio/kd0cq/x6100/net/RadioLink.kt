@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import radio.kd0cq.x6100.core.PairingController
 
 /** One connection to one radio: where it came from, and where its two servers answered. */
 data class RadioConnection(
@@ -36,7 +37,7 @@ data class RadioConnection(
 class RadioLink(
     val panel: PanelClient,
     val tci: TciClient,
-    val audio: AudioSink = NoOpAudioSink,
+    val audio: AudioSinkRouter = AudioSinkRouter(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val tokens: PanelTokenStore = MemoryPanelTokenStore(),
 ) {
@@ -64,6 +65,29 @@ class RadioLink(
 
     /** Who holds the radio's controls: none, the radio itself, a TCI client or a named browser. */
     val control: StateFlow<ControlInfo> = _control.asStateFlow()
+
+    /** The pairing machine's latest answer, published for the screens. */
+    private val _pairing = MutableStateFlow(PairingController.Status())
+
+    /**
+     * Pairing, role and controls in one machine, fed every line the radio answers.
+     *
+     * The client already keeps the token and sends it at each connection; this is what watches what
+     * becomes of it. A token the radio has forgotten ("err unknown session") or a session an admin
+     * revoked is dropped here the moment the radio says so — otherwise every later connection comes
+     * back a viewer, presses a key that is refused, and the operator has no idea why.
+     */
+    private val pairing = PairingController(
+        send = { line -> panel.sendChecked(line) },
+        tokens = tokens,
+        listener = { status, _ -> _pairing.value = status },
+    )
+
+    /** Whether we are paired, what the radio lets us do, and who holds the controls. */
+    val pairingState: StateFlow<PairingController.Status> = _pairing.asStateFlow()
+
+    /** Enough to press the key: a pairing, a role that may operate, and TX allowed to this session. */
+    val canTransmit: Boolean get() = pairing.status().canTransmit
 
     private val _bands = MutableStateFlow<List<Band>>(emptyList())
     val bands: StateFlow<List<Band>> = _bands.asStateFlow()
@@ -267,9 +291,19 @@ interface AudioSink {
     fun receive(frame: TciAudioFrame)
 }
 
-/** Until [AudioPipeline] is wired, the receiver's audio is read and dropped. */
-object NoOpAudioSink : AudioSink {
-    override fun receive(frame: TciAudioFrame) = Unit
+/**
+ * The link's sink, with the sink behind it changeable after the link is built.
+ *
+ * The link is built before the app's audio is: [RadioLinks] makes it on the first look at the radio,
+ * and the [radio.kd0cq.x6100.audio.AndroidAudioPipeline] that owns the phone's audio devices belongs
+ * to [radio.kd0cq.x6100.service.RadioRigs], which decides when the microphone and the speaker may be
+ * opened at all. So the link holds this, and the rig puts the pipeline behind it. Null means the
+ * frames are read and dropped, which is what a preview and a test link do.
+ */
+class AudioSinkRouter(@Volatile var delegate: AudioSink? = null) : AudioSink {
+    override fun receive(frame: TciAudioFrame) {
+        delegate?.receive(frame)
+    }
 }
 
 /** The link the app uses. The service starts it; the screens read it. */

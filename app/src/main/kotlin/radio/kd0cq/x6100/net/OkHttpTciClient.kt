@@ -85,13 +85,24 @@ class OkHttpTciClient(
     override fun close() = disconnect()
 
     override fun send(command: String) {
-        val ws = socket
-        if (ws == null || !ws.send(command)) error.value = "the radio is not reached: $command"
+        if (!sendChecked(command)) error.value = "the radio is not reached: $command"
+    }
+
+    /** OkHttp says no when the socket is closed, closing or its queue is full. */
+    override fun sendChecked(command: String): Boolean {
+        val ws = socket ?: return false
+        return runCatching { ws.send(command) }.getOrDefault(false)
     }
 
     override fun sendFrame(frame: ByteArray) {
-        val ws = socket
-        if (ws == null || !ws.send(ByteString.of(*frame))) error.value = "the radio is not reached: audio"
+        if (!sendFrameChecked(frame)) error.value = "the radio is not reached: audio"
+    }
+
+    /** A TX_AUDIO the socket would not take is a transmitter going silent, and the radio unkeys a
+     *  silent one 500 ms later: the caller has to hear about it on the first frame, not the fifth. */
+    override fun sendFrameChecked(frame: ByteArray): Boolean {
+        val ws = socket ?: return false
+        return runCatching { ws.send(ByteString.of(*frame)) }.getOrDefault(false)
     }
 
     private suspend fun stayConnected(endpoint: RadioEndpoint) {

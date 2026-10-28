@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import radio.kd0cq.x6100.net.RadioLinks
+import radio.kd0cq.x6100.service.RadioRigs
 import radio.kd0cq.x6100.ui.AppNav
 import radio.kd0cq.x6100.ui.RadioViewModel
 import radio.kd0cq.x6100.ui.theme.OpenX6X00Theme
@@ -45,6 +46,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Off the air when the window goes away.
+     *
+     * A phone locked in a pocket, a call coming in, another app taking the screen: in all of them the
+     * operator is no longer looking at the PTT, and a transmitter nobody is watching is the failure
+     * this app is not allowed to have. The link stays up — the notification says so, and the receiver
+     * keeps playing — only the key and the microphone let go.
+     *
+     * `onStop` and not `onPause`, because a split-screen or a floating window still has an operator
+     * looking at the radio, and the microphone is put back for them to use.
+     */
+    override fun onStop() {
+        RadioRigs.rig(application).ptt.wentToBackground()
+        super.onStop()
+    }
+
     /** Android 13 wants leaving the connection announced, and the notification needs asking for. */
     private fun askAboutNotifications() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -53,6 +70,3 @@ class MainActivity : ComponentActivity() {
         if (!granted) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }
-
-// TODO(audio): RECORD_AUDIO is in the manifest for the microphone that feeds the radio over TCI. Ask
-// for it the first time the PTT button is pressed, once PttController can key anything at all.

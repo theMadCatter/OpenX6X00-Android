@@ -4,7 +4,6 @@
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.ptt
 
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -12,19 +11,20 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * The panel server keeps a PTT press down for three seconds unless the same hold number is sent again,
  * which the radio's own page does every second, and lets go at three minutes on the air
- * (remote_server.c: ptt_down and ptt_lease). An ended hold stays ended: only a new number keys again,
- * and the radio answers "err ptt released: ...". The TCI server is harsher still: keyed with a
+ * (`remote_server.c`: `ptt_down` and `ptt_lease`). An ended hold stays ended: only a new number keys
+ * again, and the radio answers "err ptt released: ...". The TCI server is harsher still: keyed with a
  * client's audio, it unkeys after 500 ms without a frame.
  *
- * TODO(ptt): the skeleton stops here on purpose; nothing can key the radio yet. What it will take:
- *  - press(): pick a hold number above the last one used, send "key PTT 1 HOLD", and repeat the same
- *    line once a second while the button is held; a release sends "key PTT 0".
- *  - On TCI, send trx:0,true,tci and answer every TX_CHRONO tick the radio sends with one TX_AUDIO
- *    frame; it unkeys a transmitter that goes silent for 500 ms.
- *  - Fail-safe: the link dropping, the service dying, or this app going to the background must all
- *    unkey at once, and [keyed] must say so before anything else is asked of the radio.
+ * So the three methods are all a caller needs, and the difference between them is only who asked:
+ *  - [press] picks a hold number above the last one used, sends "key PTT 1 HOLD", and renews it once a
+ *    second until [release] sends "key PTT 0";
+ *  - [release] is the operator letting go;
+ *  - [failSafe] is everything else — the link dropping, the service dying, this app going to the
+ *    background — and lets go at once, whatever the link's state, and says in [refusal] why.
  *
- * Until then [NoOpPttController] never keys, so a stray tap cannot put the radio on the air.
+ * [LeasePttController] is what the app runs: the Panel lease, or the TCI audio path with this phone's
+ * microphone. There is deliberately no do-nothing implementation here any more: a placeholder that
+ * silently never keys made it look like the key worked.
  */
 interface PttController {
 
@@ -42,27 +42,4 @@ interface PttController {
 
     /** Let go for good: the link dropped, the service is stopping, the screen is locked. */
     fun failSafe(reason: String)
-}
-
-/** The placeholder the link runs on: it records nothing, renews nothing, and never keys. */
-class NoOpPttController : PttController {
-
-    private val held = MutableStateFlow(false)
-    private val refused = MutableStateFlow<String?>(null)
-
-    override val keyed: StateFlow<Boolean> = held
-    override val refusal: StateFlow<String?> = refused
-
-    override fun press() {
-        // TODO(ptt): send "key PTT 1 HOLD" with a fresh hold number and renew it every second
-    }
-
-    override fun release() {
-        // TODO(ptt): send "key PTT 0" and stop the renewals
-    }
-
-    override fun failSafe(reason: String) {
-        refused.value = reason
-        // TODO(ptt): send the release now, whatever the link's state
-    }
 }

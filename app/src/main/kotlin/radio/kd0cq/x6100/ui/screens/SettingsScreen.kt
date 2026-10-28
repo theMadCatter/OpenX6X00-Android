@@ -90,11 +90,13 @@ fun SettingsScreen(viewModel: RadioViewModel) {
             }
         }
 
-        Text("Not built yet", style = MaterialTheme.typography.titleMedium)
+        Text("What the audio path does not do", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Receive audio and the PTT key over TCI, and the microphone's audio for FT8 and SSB, are " +
-                "written but left as interfaces: audio/AudioPipeline.kt and ptt/PttController.kt say " +
-                "what is missing. Nothing keys the radio from this app today.",
+            "The receiver plays 24 kHz mono through the phone's speaker or whatever the phone itself " +
+                "routes audio to, and the microphone path captures unprocessed, with no echo " +
+                "cancellation — so with the speaker up loud and the phone's microphone keyed, the radio " +
+                "hears the phone. Nothing decodes on the phone, and the transmit meter is only what the " +
+                "radio reports. DESIGN.md keeps the list of what is known to be missing.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
