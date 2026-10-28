@@ -84,8 +84,14 @@ class OkHttpPanelClient(
     override fun close() = disconnect()
 
     override fun send(command: String) {
-        val ws = socket
-        if (ws == null || !ws.send(command)) error.value = "the radio is not reached: $command"
+        if (!sendChecked(command)) error.value = "the radio is not reached: $command"
+    }
+
+    /** OkHttp says no when the socket is closed, closing or its queue is full — which is all the ways a
+     *  renewal can be lost, and the reason a lease machine must hear about it. */
+    override fun sendChecked(command: String): Boolean {
+        val ws = socket ?: return false
+        return runCatching { ws.send(command) }.getOrDefault(false)
     }
 
     override fun askForPairingCode() {

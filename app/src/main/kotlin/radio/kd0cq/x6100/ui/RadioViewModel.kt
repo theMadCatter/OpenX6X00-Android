@@ -5,7 +5,9 @@
 
 package radio.kd0cq.x6100.ui
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,7 @@ import radio.kd0cq.x6100.net.Spot
 import radio.kd0cq.x6100.net.TCI_PORT
 import radio.kd0cq.x6100.net.TxMeters
 import radio.kd0cq.x6100.service.RadioConnectionService
+import radio.kd0cq.x6100.service.RadioRigs
 
 /**
  * What the screens show and do: the link's state in, the radio's commands out. The link itself is the
@@ -46,6 +49,7 @@ import radio.kd0cq.x6100.service.RadioConnectionService
 class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     private val link = RadioLinks.link(application)
+    private val rig = RadioRigs.rig(application)
     private val discovery = RadioDiscovery(application)
 
     val foundRadios: StateFlow<List<FoundRadio>> = discovery.radios
@@ -84,6 +88,48 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Whether this phone holds a token the radio paired it with. */
     val paired: Boolean get() = link.hasToken
+
+    /** Whether the receiver is playing: the controls screen shows it beside the S-meter. */
+    val audioRunning: StateFlow<Boolean> = rig.audio.running
+
+    /** Whether we hold the key, from either path. */
+    val pttKeyed: StateFlow<Boolean> = rig.ptt.keyed
+
+    /** Why we are not on the air, in the radio's words or ours. */
+    val pttRefusal: StateFlow<String?> = rig.ptt.refusal
+
+    /** Why the audio is not moving, in the phone's words: a refused track, a stopped capture. */
+    val audioProblem: StateFlow<String?> = rig.audio.lastError
+
+    /**
+     * Whether this phone will let us capture. The screen asks for the grant before switching the
+     * transmit audio to the phone's microphone, because the transmit machine refuses without it rather
+     * than falling back to the radio's own microphone.
+     */
+    fun hasMicrophonePermission(): Boolean =
+        getApplication<Application>().checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Where the transmit audio comes from: false keys with the microphone at the radio, on a Panel
+     * lease; true keys with this phone's microphone, on the TCI link. Switching it never carries a
+     * transmission over: the page does the same, because a call half in one path and half in the other
+     * is a call nobody understands afterwards.
+     */
+    var transmitAudioFromPhone: Boolean
+        get() = rig.ptt.usePhoneMicrophone
+        set(value) {
+            if (rig.ptt.usePhoneMicrophone != value) {
+                rig.ptt.usePhoneMicrophone = value
+                rig.ptt.release()
+            }
+        }
+
+    /** Press the key. It may refuse, and [pttRefusal] says why; nothing is sent on a guess. */
+    fun pressPtt() = rig.ptt.press()
+
+    /** Let go. Safe from anywhere, including a screen that is going away. */
+    fun releasePtt() = rig.ptt.release()
 
     init {
         _endpoint.value = link.endpoint

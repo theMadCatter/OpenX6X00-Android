@@ -56,6 +56,13 @@ interface PanelClient : Closeable {
     /** One command line to the radio; dropped with a word into [lastError] when the link is down. */
     fun send(command: String)
 
+    /**
+     * The same line, and whether the socket took it. A PTT renewal has to know: a renewal that never
+     * left the phone is a lease about to end, and the honest answer then is to stop pressing, not to
+     * keep pressing into the dark.
+     */
+    fun sendChecked(command: String): Boolean
+
     /** Put a six-digit code on the radio's screen, and answer it with [pair]. */
     fun askForPairingCode()
 
@@ -82,8 +89,15 @@ interface TciClient : Closeable {
 
     fun send(command: String)
 
+    /** [send], and whether the socket took it: the key and the unkey both ask before acting on it. */
+    fun sendChecked(command: String): Boolean
+
     /** A binary frame: our microphone's TX_AUDIO while keyed. TX_CHRONO ticks come the other way. */
     fun sendFrame(frame: ByteArray)
+
+    /** [sendFrame], and whether the socket took it. A frame it would not take is a silent transmitter,
+     *  and the radio unkeys a silent one; saying so is what lets us stop first. */
+    fun sendFrameChecked(frame: ByteArray): Boolean
 }
 
 /** How long to wait before trying again, in the way the browser page does: a short wait that grows. */

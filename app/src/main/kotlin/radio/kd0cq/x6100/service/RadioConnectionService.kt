@@ -26,8 +26,6 @@ import radio.kd0cq.x6100.net.RadioEndpoint
 import radio.kd0cq.x6100.net.RadioLink
 import radio.kd0cq.x6100.net.RadioLinks
 import radio.kd0cq.x6100.net.TCI_PORT
-import radio.kd0cq.x6100.ptt.NoOpPttController
-import radio.kd0cq.x6100.ptt.PttController
 
 /**
  * The connection's owner: a foreground service the user can see and stop, so the panel and TCI
@@ -36,11 +34,14 @@ import radio.kd0cq.x6100.ptt.PttController
 class RadioConnectionService : LifecycleService() {
 
     private val link: RadioLink get() = RadioLinks.link(this)
-    private val ptt: PttController = NoOpPttController()
+    private val rig: Rig get() = RadioRigs.rig(this)
 
     override fun onCreate() {
         super.onCreate()
         makeChannel()
+        // Built here, not on the first press: the key has to be watching the link before the operator
+        // touches anything, and the audio has to be open when the radio's frames start arriving.
+        RadioRigs.rig(this)
         lifecycleScope.launch {
             link.connection.map { it.panel }.collectLatest { show(it) }
         }
@@ -65,13 +66,23 @@ class RadioConnectionService : LifecycleService() {
 
     override fun onDestroy() {
         // Fail-safe first: a link going down must never leave the radio on the air.
-        ptt.failSafe("the radio service stopped")
+        rig.shutdown("the radio service stopped")
         link.disconnect()
         super.onDestroy()
     }
 
+    /**
+     * The task swiped away. The service may be started again by a sticky restart, and a phone that
+     * restarted it has no operator behind it: so the key is let go here, on the way out, rather than
+     * left to whatever the restart does or does not do.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        rig.shutdown("the app was closed")
+        super.onTaskRemoved(rootIntent)
+    }
+
     private fun stopEverything() {
-        ptt.failSafe("stopped by you")
+        rig.shutdown("stopped by you")
         link.disconnect()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
