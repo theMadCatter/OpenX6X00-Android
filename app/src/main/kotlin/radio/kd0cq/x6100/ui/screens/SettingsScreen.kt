@@ -1,0 +1,109 @@
+// OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
+// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Written by Revolta via OpenCode.
+
+package radio.kd0cq.x6100.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import radio.kd0cq.x6100.net.LinkPhase
+import radio.kd0cq.x6100.ui.RadioViewModel
+
+/**
+ * What the link is, what the radio is, who holds it and who is paired with it, and the two ways to get
+ * here without mDNS. Nothing on this screen is a guess: every line comes from the radio itself.
+ */
+@Composable
+fun SettingsScreen(viewModel: RadioViewModel) {
+    val phase by viewModel.phase.collectAsState()
+    val tciPhase by viewModel.tciPhase.collectAsState()
+    val hello by viewModel.hello.collectAsState()
+    val role by viewModel.role.collectAsState()
+    val control by viewModel.control.collectAsState()
+    val sessions by viewModel.sessions.collectAsState()
+    val endpoint by viewModel.endpoint.collectAsState()
+    val error by viewModel.lastError.collectAsState()
+
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Setup", style = MaterialTheme.typography.headlineSmall)
+
+        Text("Link", style = MaterialTheme.typography.titleMedium)
+        Line("panel", phase.name.lowercase())
+        Line("tci", tciPhase.name.lowercase())
+        Line("radio", endpoint?.let { "${it.name} ${it.host}:${it.panelPort} / ${it.tciPort}" } ?: "-")
+        Line("firmware", hello?.let { "v${it.version} boot ${it.bootId}" } ?: "-")
+        Line("role", "${role.role.wire} tx=${if (role.txAllowed) 1 else 0} name=${role.sessionName.ifBlank { "-" }}")
+        Line("control", control.label)
+        error?.let { Line("last word", it) }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = viewModel::search) { Text("Search LAN") }
+            OutlinedButton(onClick = viewModel::disconnect) { Text("Disconnect") }
+        }
+        OutlinedButton(onClick = { viewModel.forgetPairing() }, enabled = viewModel.paired) { Text("Forget this pairing") }
+
+        Text("Paired sessions", style = MaterialTheme.typography.titleMedium)
+        OutlinedButton(onClick = viewModel::askSessions, enabled = role.canAdmin) {
+            Text(if (role.canAdmin) "Ask the radio" else "Admin role needed")
+        }
+        if (sessions.isEmpty()) {
+            Text("Not asked, or none.", style = MaterialTheme.typography.bodyMedium)
+        }
+        sessions.forEach { session ->
+            Line(
+                "#${session.index} ${session.name}",
+                "${session.role} tx=${if (session.txAllowed) 1 else 0} ${if (session.online) "online" else "away"} ${session.ip}" +
+                    if (session.mine) " (us)" else "",
+            )
+        }
+
+        Text("By hand", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "The radio answers x6100.local and advertises _http._tcp, _https._tcp and _tci._tcp; it " +
+                "advertises no panel service, so the panel port 50002 is only ever typed or kept from " +
+                "the last discovery. Enter the radio's address if the LAN's resolver does not know it.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        listOf("x6100.local", "192.168.1.10").forEach { host ->
+            OutlinedButton(onClick = { viewModel.connectToHost(host) }, enabled = phase != LinkPhase.CONNECTING) {
+                Text("Connect to $host")
+            }
+        }
+
+        Text("Not built yet", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Receive audio and the PTT key over TCI, and the microphone's audio for FT8 and SSB, are " +
+                "written but left as interfaces: audio/AudioPipeline.kt and ptt/PttController.kt say " +
+                "what is missing. Nothing keys the radio from this app today.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun Line(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(label, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+        Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+    }
+}

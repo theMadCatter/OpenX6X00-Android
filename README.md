@@ -27,6 +27,25 @@ under the same terms, so it can never be closed up.
 
 Early work. Not yet usable on the air.
 
+## Project layout
+
+```
+app/src/main/kotlin/radio/kd0cq/x6100/
+  net/        panel (50002) and TCI (50001) WebSocket clients, with the
+              pure codecs (PanelProtocol, TciProtocol) beside them
+  audio/      the RX/TX audio path over TCI (interfaces first, audio later)
+  ptt/        PTT lease control with a fail-safe unkey
+  discovery/  NSD browse for _tci._tcp / _http._tcp, manual host+port fallback
+  service/    the foreground service that owns the connection
+  ui/         Compose screens: Connect, Pairing, Waterfall, Controls,
+              FT8, Spots, Log, Settings
+app/src/test/ codec unit tests, built from the firmware's real lines and frames
+```
+
+The protocol shapes come from the firmware sources (`src/remote_server.c`,
+`src/tci_server.c`, `src/tci_audio.c`) in the [firmware
+repo](https://github.com/theMadCatter/OpenX6X00); nothing on the wire is invented.
+
 ## Building
 
     ./gradlew assembleDebug testDebugUnitTest
