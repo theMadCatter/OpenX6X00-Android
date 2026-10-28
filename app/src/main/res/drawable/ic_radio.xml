@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
+     Copyright (C) 2026 KD0CQ (theMadCatter)
+     SPDX-License-Identifier: GPL-3.0-or-later
+     Written by Revolta via OpenCode. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF1B5E20"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#FF80E5FF"
+        android:pathData="M54,30m-8,0a8,8 0,1 1,16 0a8,8 0,1 1,-16 0" />
+    <path
+        android:fillColor="#FF80E5FF"
+        android:pathData="M24,84h60v6h-60z" />
+    <path
+        android:fillColor="#FF80E5FF"
+        android:pathData="M30,70h48v8h-48z" />
+    <path
+        android:fillColor="#FF80E5FF"
+        android:pathData="M50,38h8v32h-8z" />
+</vector>

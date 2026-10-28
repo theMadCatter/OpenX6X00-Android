@@ -1,0 +1,94 @@
+// OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
+// Copyright (C) 2026 KD0CQ (theMadCatter)
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Written by Revolta via OpenCode.
+package radio.kd0cq.x6100.net
+
+import java.io.Closeable
+
+/** A radio we can reach: where it answered discovery, and the two ports its servers listen on. */
+data class RadioEndpoint(
+    val name: String,
+    val host: String,
+    val panelPort: Int = PANEL_PORT,
+    val tciPort: Int = TCI_PORT,
+) {
+    val panelUrl: String get() = "ws://$host:$panelPort/"
+    val tciUrl: String get() = "ws://$host:$tciPort/"
+
+    companion object {
+        /** The radio's own mDNS name, when the LAN's resolver knows it. */
+        const val DEFAULT_HOST = "x6100.local"
+
+        fun default(name: String = "OpenX6X00", host: String = DEFAULT_HOST) = RadioEndpoint(name, host)
+    }
+}
+
+/** Where the panel link stands, for the connect screen and the notification. */
+enum class LinkPhase {
+    IDLE,
+    CONNECTING,
+    CONNECTED,
+    PAIRING,
+    PAIRED,
+    LOST,
+    STOPPED,
+    ;
+
+    val online: Boolean get() = this == CONNECTED || this == PAIRING || this == PAIRED
+}
+
+/** The panel WebSocket: the radio's state, the spectrum, the apps, pairing and control. */
+interface PanelClient : Closeable {
+
+    /** What the radio said, in the order it arrived. */
+    val events: kotlinx.coroutines.flow.Flow<PanelEvent>
+
+    /** The link's phase, and the last word about why it is not up. */
+    val phase: kotlinx.coroutines.flow.StateFlow<LinkPhase>
+    val lastError: kotlinx.coroutines.flow.StateFlow<String?>
+
+    /** Keep trying this radio until [disconnect], the way radio_link.js reconnects. */
+    fun connect(endpoint: RadioEndpoint)
+
+    fun disconnect()
+
+    /** One command line to the radio; dropped with a word into [lastError] when the link is down. */
+    fun send(command: String)
+
+    /** Put a six-digit code on the radio's screen, and answer it with [pair]. */
+    fun askForPairingCode()
+
+    fun pair(code: String, name: String)
+
+    /** The token the radio handed us last, so a reconnect can [PanelCommands.auth] with it. */
+    val token: String?
+}
+
+/** The TCI WebSocket: the receiver's audio, tuning, and the key. */
+interface TciClient : Closeable {
+
+    val events: kotlinx.coroutines.flow.Flow<TciEvent>
+
+    /** The receiver's audio, as it comes from the radio. */
+    val audio: kotlinx.coroutines.flow.Flow<TciAudioFrame>
+
+    val phase: kotlinx.coroutines.flow.StateFlow<LinkPhase>
+    val lastError: kotlinx.coroutines.flow.StateFlow<String?>
+
+    fun connect(endpoint: RadioEndpoint)
+
+    fun disconnect()
+
+    fun send(command: String)
+
+    /** A binary frame: our microphone's TX_AUDIO while keyed. TX_CHRONO ticks come the other way. */
+    fun sendFrame(frame: ByteArray)
+}
+
+/** How long to wait before trying again, in the way the browser page does: a short wait that grows. */
+fun reconnectDelayMs(attempt: Int, capMs: Long = 10_000): Long {
+    if (attempt <= 0) return 500
+    val ms = 500L shl attempt.coerceAtMost(14)
+    return ms.coerceAtMost(capMs)
+}
