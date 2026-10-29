@@ -31,7 +31,20 @@ class PttLeaseStateMachineTest {
         /** Sends from this number on fail, as a socket whose peer has gone does. */
         var failFrom = Int.MAX_VALUE
 
+        /** Drop `key PTT 1` after the first one has been accepted: a renewal the socket will not take. */
+        var dropRenewals = false
+
+        /** Drop `key PTT 0`, so a test can show the retry that follows a refused unkey. */
+        var dropUnkey = false
+
+        /** Drop every down-command, and still accept `key PTT 0`. */
+        var dropDown = false
+
         fun send(line: String): Boolean {
+            val down = line.startsWith("key PTT 1")
+            if (dropDown && down) return false
+            if (dropRenewals && down && lines.any { it.startsWith("key PTT 1") }) return false
+            if (dropUnkey && line == "key PTT 0") return false
             if (lines.size + 1 >= failFrom) return false
             lines += line
             return true
@@ -175,15 +188,54 @@ class PttLeaseStateMachineTest {
 
     @Test
     fun aRenewalTheSocketWouldNotTakeEndsThePress() {
+        // The renewal is the write that fails. The up-command is a different write, and it has to
+        // go out: ptt_lease() holds the key for PTT_LEASE_MS after the last renewal it accepted.
+        // Stopping the machine without `key PTT 0` left the app Idle while that key was still down.
         val m = machine()
         m.press()
         m.radioTx(true)
-        wire.failFrom = 2 // the first renewal is the one that fails
+        wire.dropRenewals = true
         scheduler.advance(1_000)
         assertFalse(m.keyed)
         assertEquals("the radio is not reached: the renewal was lost", m.lastReason)
+        assertEquals(listOf("key PTT 0"), wire.keysUp())
+        assertFalse(m.owesUnkey)
         scheduler.advance(10_000)
-        assertEquals(1, wire.lines.size) // the press, and nothing else: the failed write is not retried
+        // The failed renewal is not retried, and the unkey is not sent a second time once accepted.
+        assertEquals(1, wire.keysDown().size)
+        assertEquals(1, wire.keysUp().size)
+    }
+
+    @Test
+    fun aPressTheSocketRefusesIsStillFollowedByKeyUp() {
+        // ptt_down() records the hold before it keys. A down-command the phone did not queue can
+        // still be one the radio already had. `key PTT 0` releases it, and releases nothing when
+        // the down never landed (the key-up branch returns when this client is not holding it).
+        wire.dropDown = true
+        val m = machine()
+        assertFalse(m.press())
+        assertEquals(listOf("key PTT 0"), wire.lines)
+        assertEquals(2L, m.nextHoldNumber())
+        assertFalse(m.keyed)
+        assertFalse(m.owesUnkey)
+    }
+
+    @Test
+    fun aRefusedUnkeyIsRetriedUntilTheSocketTakesIt() {
+        val m = machine()
+        m.press()
+        m.radioTx(true)
+        wire.dropRenewals = true
+        wire.dropUnkey = true
+        scheduler.advance(1_000)
+        assertTrue(m.owesUnkey)
+        assertTrue(wire.keysUp().isEmpty())
+        wire.dropUnkey = false
+        scheduler.advance(250) // UNKEY_RETRY_MS
+        assertEquals(listOf("key PTT 0"), wire.keysUp())
+        assertFalse(m.owesUnkey)
+        scheduler.advance(10_000)
+        assertEquals(1, wire.keysUp().size)
     }
 
     // ---- the radio's own words ----
