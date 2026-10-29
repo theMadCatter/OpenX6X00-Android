@@ -3,7 +3,7 @@
 An open, community companion app for the Xiegu X6100 running the
 [OpenX6X00](https://github.com/theMadCatter/OpenX6X00) firmware. **Android only** for now.
 
-By Chris Fink KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
+By KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
 
 ## What it is
 
