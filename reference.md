@@ -1,0 +1,86 @@
+# Reference — audio PTT review (revolta/audio-ptt-core)
+
+Working notes for the review of `revolta/audio-ptt-core` at `f8f8b0c` (base `main` `2098e0b`) and the fixes on `cursor/explicit-ptt-unkey-abc7`. Owner: Chris Fink KD0CQ (theMadCatter). Firmware compared: Guru-RF/OpenX6X00 sources `remote_server.c`, `tci_server.c`, `tci_audio.h`, `control_owner.c`, `radio_session.js` (tree fetched for this review, not the app's DESIGN.md).
+
+## What the question was
+
+When a PTT lease renewal fails (send error, socket dying), does the code send an explicit unkey (`key PTT 0` and/or `trx:0,false;`), or does it only flip internal state and rely on the radio's lease timeout?
+
+## What I found (before the fix)
+
+A failed Panel renewal did **not** send `key PTT 0`. `PttLeaseStateMachine` called `letGoLocked(..., sendRelease = false)` at the lost-renewal site. The machine went Releasing, then Idle. `keyed` is false in Releasing, so `LeasePttController`'s panel-phase collector (gated on `lease.keyed`) did not try again. The unit test `aRenewalTheSocketWouldNotTakeEndsThePress` asserted that the wire stayed at the one down-command.
+
+The radio then unkeys only if:
+
+- the panel socket stays up and `ptt_lease()` fires after `PTT_LEASE_MS` (3000 ms) — `remote_server.c`, and
+- or the socket actually closes and `client_close()` → `client_release_keys()` emits key-up.
+
+OkHttp `WebSocket.send` returns false when the socket has failed, is closing, or the queue exceeds 16 MiB (which also closes the socket). A false renewal often means the following `key PTT 0` cannot be queued either. The explicit unkey still matters when one write fails and a later one can succeed (a dropped binary TX frame versus the text unkey, or a transient false). The firmware timeout is the backstop when the socket is dead, not a substitute for the up-command while it is alive.
+
+The same pattern existed for a lost TCI audio frame: `letGoLocked(..., sendUnkey = false)`. The radio's backstop is `TX_SILENCE_MS` (500) or `tx_session_end` on socket close. `handle_cmd` never refuses `trx:0,false` from the client that keyed (audit B01 in `tci_server.c`: refusing left the radio on the air until the 180 s limit).
+
+A second stuck-carrier bug, on a healthy socket: `onPanelEvent` called `lease.controlLost` only when the lease was keyed and `mine` was false. A phone-mic session (`trx:0,true,tci;`) ignored `ctl local` and `ctl browser …`. `ctl_local_input()` in `control_owner.c` forces `CTL_LOCAL` even while transmitting, and the TCI server does not unkey when that happens. `ctl tci 0` is **this** session: `ctl_tell()` sets MINE only when the holder is this panel slot (`CTL_BROWSER`). Treating every `mine=0` as "someone else" would unkey every phone-mic transmission.
+
+Also on a healthy socket:
+
+- `role operate 0` (`tx_ok` clear) was ignored for the phone-mic path. The UI gated the button on `canOperate` only, and `pointerInput` is the real key, so `Button.enabled` alone did not stop a press.
+- A panel-socket drop fail-safed only the lease. Phone-mic TX survived the loss of the only channel that carries `ctl`.
+- Panel `tx 0` did not stop a Keyed TCI session. (`tx 0` during TCI `Starting` must not, or a stale line from the previous over cancels a key that has not been paced yet.)
+
+Paths that already sent an unkey, and were left that way: button `finally` → `releasePtt`; `MainActivity.onStop` → `wentToBackground`; service `onDestroy` shutdown **before** `link.disconnect`; `onTaskRemoved` shutdown; 170 s cap; 1.5 s panel confirm; 1 s TCI confirm; 500 ms silence; 500 ms mic stall; malformed TX frame (`txAudioOrNull` null); `linkLost` / `failSafe` while still Requesting/Keyed/Starting; radio `tx 0` on the lease machine.
+
+## What was changed, and why
+
+Cause, not a second watchdog: any exit from a live hold attempts the up-command unless the radio has already said the carrier is down.
+
+- `carrierMayBeUp` / `owesUnkey` on both machines. `owesUnkey` is false during a live press (link loss uses `onAir`) and true after the press if the up-command was not accepted.
+- Lost renewal and lost TX frame pass `sendRelease` / `sendUnkey` true.
+- A down-command the socket refuses is still followed by the up-command. `ptt_down()` records the hold before it keys; a write OkHttp did not queue can still be one the radio had. `key PTT 0` is a no-op when this client holds nothing (`remote_server.c` returns when the key is not in `held[]`).
+- Retries: Panel 250 ms × 12 (about `PTT_LEASE_MS`); TCI 100 ms × 6 (about `TX_SILENCE_MS`). Generation-scoped. Cancelled with the other timers. Refused while Requesting/Keyed/Starting. The next `press()` calls `deliverUnkey` **before** the new down-command, under the same lock, because `key PTT 0` has no hold number and a late copy would release the new press.
+- `err ptt released` clears the owe flag and does not send `key PTT 0`. TCI `onTransmitting(false)` sends one `trx:0,false;` (harmless if the server already ended the session; B01 says it is never refused for the owner) and then clears the owe flag so it is not retried.
+- `reset()` unkeys when the session was live **or** an up-command is still owed. Previously Releasing after a lost renewal made `reset()` send nothing.
+- TCI `letGo` / `reset` send the unkey **before** `mic.stop()`. `stop()` joins the capture thread for up to 500 ms, which is the whole of `TX_SILENCE_MS`.
+- `LeasePttController`: panel phase loss fail-safes both paths when `onAir` or either machine `owesUnkey`. TCI phase loss calls `tx.linkLost` when keyed or owing. `tx 0` stops TCI only in `State.Keyed`. Control loss unkeys TCI unless `ControlInfo.isTci`. Role loss fail-safes both when `!canOperate` or `!txAllowed`. `RadioRig`'s TCI-phase watcher uses `onAir || needsUnkey`.
+- `ControlsScreen`: `mayKey = canOperate && txAllowed` gates `Button.enabled` and `pointerInput`. The microphone switch stays on `canOperate` only.
+
+Why this does not re-key or unkey the wrong press: the generation check and the lock around "unkey owed, then down-command" are the same mechanism the branch already used to stop a renewal after release. Retries are bounded so a dead socket is not written forever. Firmware socket-close and the 3 s / 500 ms / 180 s limits remain the backstop when every write fails.
+
+## Tests
+
+`./gradlew testDebugUnitTest` on JDK 21: **146 tests, 0 failures** (133 on `f8f8b0c`, plus the cases below).
+
+New or rewritten coverage:
+
+- Renewal dropped, unkey accepted → exactly one `key PTT 0`, no second unkey, no second down-command.
+- Unkey refused → `owesUnkey`, then one `key PTT 0` after 250 ms, and no further copies.
+- Down-command refused → `key PTT 0` still sent; hold number still spent.
+- TX frame refused → `trx:0,false;` sent; the refused frame is not on the wire.
+- TCI key refused → unkey still sent and the microphone stopped.
+- TCI unkey refused → retried after 100 ms, once.
+- `ctl local` and `ctl browser other` unkey a phone-mic session. `ctl tci` does not.
+- Lease control loss still sends `key PTT 0` and does not touch TCI.
+- `role operate 0` and `role view` unkey whichever path is up.
+- Panel `tx 0` does not cancel TCI `Starting`; it does unkey TCI `Keyed`.
+- `err ptt released` stops the phone microphone.
+- Panel phase `LOST` and TCI phase `LOST` each send `trx:0,false;` for a phone-mic session.
+
+The original suite already drove button release, 1.5 s confirm, 170 s cap, 500 ms silence, 500 ms mic stall, malformed frames, link loss while still keyed, and "no frame after release". Those still pass. They did not catch the renewal bug, because the test asserted the missing unkey.
+
+## What is still true, and not changed
+
+- Hard process kill: no userspace unkey. Firmware `client_close` / TCI `fd < 0` → `tx_session_end` is the backstop.
+- `WebSocket.send == false` usually means the unkey cannot be queued either. The retry covers the window where a later write works.
+- Panel `SharedFlow` (`DROP_OLDEST`, 512) is shared with spectrum and screen JPEGs. A dropped `ctl` / `tx 0` / `err` is not repaired. Dropped chronos fail safe (radio silence-unkeys). Not changed: splitting that flow is a larger protocol-client change than this fix.
+- Lease `tx 0` during `Requesting` still unkeys. The web page does not abort a requesting press on `tx 0`. Left as the more cautious behavior.
+- Speaker-to-mic feedback and half-duplex are unchanged (DESIGN.md).
+- This is a Jetpack Compose app. It was not rewritten.
+
+## Issues log
+
+| Problem | Cause | Change |
+|---|---|---|
+| Renewal failure left the carrier up to 3 s (or 180 s if the socket stayed half-open and the lease timer did not run) while the app showed Idle | `sendRelease = false`, and later paths trusted `keyed` | Send `key PTT 0`, remember `carrierMayBeUp`, retry, and teach link-loss / `reset` to look at `owesUnkey` |
+| Lost TX frame waited on `TX_SILENCE_MS` even when the text socket could still take `trx:0,false;` | `sendUnkey = false` | Send the unkey and retry ~500 ms |
+| Phone-mic TX ignored control loss, `tx_ok` clearing, panel drop, and panel `tx 0` | `onPanelEvent` only talked to the lease machine, and only when `mine` was false | Unkey TCI unless the holder is `tci`; fail-safe both paths on role and panel drop; `tx 0` only after `Keyed` |
+| A session with operate but `tx_ok` 0 could still press PTT | Gesture checked `canOperate` only | `mayKey` includes `txAllowed` |
+| DESIGN.md said chronos run on the OkHttp thread, and that a lost renewal is a release, while the renewal site skipped the up-command | Doc written ahead of the code | Doc updated to the code after the fix. Test count was 88 in the doc, 133 on the branch, 146 after these tests |
