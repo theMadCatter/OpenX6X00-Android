@@ -84,3 +84,24 @@ The original suite already drove button release, 1.5 s confirm, 170 s cap, 500 m
 | Phone-mic TX ignored control loss, `tx_ok` clearing, panel drop, and panel `tx 0` | `onPanelEvent` only talked to the lease machine, and only when `mine` was false | Unkey TCI unless the holder is `tci`; fail-safe both paths on role and panel drop; `tx 0` only after `Keyed` |
 | A session with operate but `tx_ok` 0 could still press PTT | Gesture checked `canOperate` only | `mayKey` includes `txAllowed` |
 | DESIGN.md said chronos run on the OkHttp thread, and that a lost renewal is a release, while the renewal site skipped the up-command | Doc written ahead of the code | Doc updated to the code after the fix. Test count was 88 in the doc, 133 on the branch, 146 after these tests |
+| Panel `ctl` / `tx` / `role` / `err` could be evicted by spectrum or screen frames | One 512-slot `DROP_OLDEST` flow carried both | `PanelEventBus`: text on an unlimited queue, pictures conflated to the latest, socket generation retires a dead socket's queue. Reconnect resync is `auth` + `panel 1` (`panel_fresh` only on the subscribe edge). See the section below |
+
+## Panel lanes (after merge 5992031)
+
+Problem: `OkHttpPanelClient` posted text and binary frames into one `MutableSharedFlow` (`extraBufferCapacity = 512`, `DROP_OLDEST`). A waterfall or a screen JPEG stream fills that when the collector is behind, and the oldest entry — often `ctl`, `tx 0`, `role`, or `err ptt released` — is the one that is dropped. The PTT machines then never see the line that should unkey.
+
+What the firmware allows for a resync (`remote_server.c`):
+
+- Every new WebSocket gets `hello`, `size`, `keys`, `role`, and `ctl` before any command.
+- `auth` sends `role` and `ctl` again.
+- `panel 1` sets `panel_fresh` only when `panel` was off. That pushes modes, bands, plan, and the full `state` line, including `tx`.
+- A second `panel 1` on a socket that is already subscribed does nothing. There is no "send state" command. Toggling `panel 0` / `panel 1` would ask again and is not done: once pictures cannot evict text, a waterfall is not a gap in the control stream.
+
+Change:
+
+- `PanelEventBus` queues every text line on `Channel.UNLIMITED` and emits it in order. `MutableSharedFlow` was not given an enormous buffer: it allocates `replay + extraBufferCapacity` up front. The OkHttp thread only `trySend`s, so the reader does not block.
+- Spectrum and screen use a one-deep replay (`DROP_OLDEST`). `RadioLink.collectFrames` is the only consumer of that lane.
+- `openConnection` / `closeConnection` stamp a generation. `disconnect` retires it before cancelling the socket. Queued lines from the dead socket are skipped so a late `tx 0` cannot release the next press. Link-lost already fail-safed the press that was live.
+- `textQueued`, `textHighWater`, and `textRejected` are atomics. Nothing is logged per frame.
+
+Tests: a flood of spectrum and screen frames (well past 512) does not drop `ctl`, `tx 0`, `role`, `err`, or the text lines posted among the frames; the picture lane still holds only the latest frame; lines posted before any collector starts are kept; a retired socket's `tx` is not delivered on the next connection. `PanelCommands.reconnect` is `auth` (when a token exists) and `panel 1`.

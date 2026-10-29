@@ -172,6 +172,7 @@ class RadioLink(
 
     init {
         collectPanel()
+        collectFrames()
         collectTci()
         watchPhases()
     }
@@ -240,8 +241,7 @@ class RadioLink(
                     is PanelEvent.Cw -> _cwLines.value = (_cwLines.value + event.text).takeLast(CW_LINES_KEPT)
                     is PanelEvent.Logged -> _receipts.value = (_receipts.value + event.receipt).takeLast(RECEIPTS_KEPT)
                     is PanelEvent.Sessions -> _sessions.value = event.sessions
-                    is PanelEvent.Spectrum -> _spectrum.value = event.frame
-                    is PanelEvent.Screen -> _screen.value = event.frame
+                    is PanelEvent.Spectrum, is PanelEvent.Screen -> Unit
                     is PanelEvent.Paired -> {
                         _lastAnswer.value = "paired as ${event.role.wire}"
                         _role.value = RoleInfo(event.role, event.txAllowed, _role.value.sessionName)
@@ -250,6 +250,19 @@ class RadioLink(
                     is PanelEvent.Failure -> _lastAnswer.value = event.text
                     is PanelEvent.Notice -> _lastAnswer.value = event.text
                     is PanelEvent.Pong -> Unit
+                }
+            }
+        }
+    }
+
+    /** Pictures only. Kept off [collectPanel] so a JPEG cannot sit in front of `ctl` or `tx`. */
+    private fun collectFrames() {
+        scope.launch {
+            panel.frames.collect { event ->
+                when (event) {
+                    is PanelEvent.Spectrum -> _spectrum.value = event.frame
+                    is PanelEvent.Screen -> _screen.value = event.frame
+                    else -> Unit
                 }
             }
         }
