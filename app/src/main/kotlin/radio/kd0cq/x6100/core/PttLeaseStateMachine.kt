@@ -71,6 +71,25 @@ class PttLeaseStateMachine(
     private var confirmTask: PttTask? = null
     private var settleTask: PttTask? = null
 
+    /**
+     * A `key PTT 0` that the socket did not take, retried until [UNKEY_RETRIES] is spent.
+     * Cancelled with the rest of the hold so it cannot land on the next press.
+     */
+    private var unkeyRetry: PttTask? = null
+
+    /**
+     * A down-command may have reached the radio and the matching `key PTT 0` has not been accepted since.
+     *
+     * Before this flag existed, a renewal whose [send] returned false called [letGoLocked] with
+     * `sendRelease = false`. The machine went to [State.Releasing] and then Idle, and because [keyed]
+     * was already false the later link-loss path did not try again. `ptt_down()` in `remote_server.c`
+     * leaves the hardware key down until `key PTT 0`, `PTT_LEASE_MS` (3 s), or `client_release_keys()`
+     * on socket close. The app was Idle while that key was still down. The flag is what makes shutdown,
+     * the next press, and the retries below keep asking for the up-command until one is accepted or the
+     * radio has said the hold is already over (`err ptt released`).
+     */
+    private var carrierMayBeUp = false
+
     /** What the radio's page shows as `down`: we asked for the key and the radio has not taken it back. */
     val keyed: Boolean
         get() = synchronized(lock) { state == State.Requesting || state == State.Keyed }
@@ -85,6 +104,16 @@ class PttLeaseStateMachine(
 
     /** The hold number the next press will use; strictly increasing over the whole session. */
     fun nextHoldNumber(): Long = synchronized(lock) { lastHold + 1 }
+
+    /**
+     * A key may still be down and this machine is no longer in the press that owns it.
+     * Link loss and service shutdown read this: [keyed] is already false while [State.Releasing],
+     * which used to skip the only unkey those paths attempted.
+     */
+    val owesUnkey: Boolean
+        get() = synchronized(lock) {
+            carrierMayBeUp && state != State.Requesting && state != State.Keyed
+        }
 
     /**
      * Press. A new number, `key PTT 1 HOLD`, the renewals started, the cap armed.
@@ -103,18 +132,31 @@ class PttLeaseStateMachine(
             listener(state, reason)
             return false
         }
+        // Any up-command still owed goes out before this down-command. `key PTT 0` carries no hold
+        // number: the firmware releases whatever this client is holding (remote_server.c, the key-up
+        // branch). A copy that arrived after the new `key PTT 1` would unkey the press just started.
+        deliverUnkeyLocked()
         val hold = ++lastHold
         if (!send(PanelCommands.key(PTT_KEY, true, hold.toString()))) {
-            // The number is spent: the radio may have seen the write before it failed, so the next
-            // press takes a higher one and this one is never sent again.
+            // The number is spent either way. ptt_down() stores the hold before it decides to key,
+            // and a write OkHttp did not queue can still have been the one the radio already had.
+            // `key PTT 0` is a no-op when this client holds nothing, and it is the unkey when the
+            // down-command did land. Leaving it unsent waited on PTT_LEASE_MS.
             liveHold = null
             state = State.Idle
+            if (!send(PanelCommands.key(PTT_KEY, false))) {
+                carrierMayBeUp = true
+                armUnkeyRetryLocked(generation)
+            } else {
+                carrierMayBeUp = false
+            }
             reason = "the radio is not reached: no transmission"
             listener(state, reason)
             return false
         }
         liveHold = hold
         generation++
+        carrierMayBeUp = true
         state = State.Requesting
         reason = null
         armRenewalLocked(hold, generation)
@@ -132,8 +174,13 @@ class PttLeaseStateMachine(
 
     /** Release, because the thumb came up: `key PTT 0`, and the renewals stop here. */
     fun release() = synchronized(lock) {
-        if (state == State.Idle) return
-        letGoLocked(null, sendRelease = state == State.Requesting || state == State.Keyed)
+        if (state != State.Requesting && state != State.Keyed) {
+            // Already unkeying, or idle with an up-command the socket refused. Try again; do not
+            // restart the settle timer, and do not send a down-command.
+            deliverUnkeyLocked()
+            return
+        }
+        letGoLocked(null, sendRelease = true)
     }
 
     /**
@@ -142,12 +189,16 @@ class PttLeaseStateMachine(
      * app went away, the microphone died.
      */
     fun failSafe(reason: String) = synchronized(lock) {
-        if (state == State.Idle) {
+        if (state != State.Requesting && state != State.Keyed) {
+            // Releasing or idle. The first up-command may have been the one the socket refused
+            // (a lost renewal used to stop here without ever sending it). Ask again while the
+            // caller still has a socket, then keep the reason for the screen.
+            deliverUnkeyLocked()
             this.reason = reason
-            listener(State.Idle, reason)
+            listener(state, reason)
             return
         }
-        letGoLocked(reason, sendRelease = state == State.Requesting || state == State.Keyed)
+        letGoLocked(reason, sendRelease = true)
     }
 
     /**
@@ -186,6 +237,11 @@ class PttLeaseStateMachine(
     fun radioError(text: String): Boolean = synchronized(lock) {
         if (text.startsWith(ERR_PTT_RELEASED)) {
             if (state != State.Idle) {
+                // ptt_lease() already emitted the key-up and took the hold out of the client's
+                // array. Another `key PTT 0` is not what ends it, and a retry of one would be noise.
+                carrierMayBeUp = false
+                unkeyRetry?.cancel()
+                unkeyRetry = null
                 // "ptt released: no renewal from the page" — the reason is what follows the colon.
                 val why = text.removePrefix(ERR_PTT_RELEASED).removePrefix(":").trim()
                     .ifEmpty { "the radio released the PTT" }
@@ -224,9 +280,19 @@ class PttLeaseStateMachine(
      */
     fun reset() = synchronized(lock) {
         val wasLive = state == State.Requesting || state == State.Keyed
+        val owed = carrierMayBeUp
         cancelTimersLocked()
         liveHold = null
-        if (wasLive) send(PanelCommands.key(PTT_KEY, false))
+        // A live hold, or one whose up-command never left, is released here. reset() used to skip
+        // that whenever failSafe had already moved the machine to Releasing, which is exactly the
+        // state a lost renewal leaves behind when its own `key PTT 0` was refused.
+        if (wasLive || owed) {
+            if (send(PanelCommands.key(PTT_KEY, false))) carrierMayBeUp = false
+            else {
+                carrierMayBeUp = true
+                armUnkeyRetryLocked(generation)
+            }
+        }
         state = State.Idle
         reason = null
         listener(state, null)
@@ -243,7 +309,12 @@ class PttLeaseStateMachine(
                 if (gen != generation || liveHold != hold) return@synchronized
                 if (state != State.Requesting && state != State.Keyed) return@synchronized
                 if (!send(PanelCommands.key(PTT_KEY, true, hold.toString()))) {
-                    letGoLocked("the radio is not reached: the renewal was lost", sendRelease = false)
+                    // The renewal did not leave. The hold that did is still down on the radio until
+                    // `key PTT 0`, PTT_LEASE_MS, or the socket closing (client_release_keys). Stopping
+                    // our own timers without the up-command is the app going Idle under a live carrier.
+                    // Send the up-command anyway: a socket that refused one line can still take the next,
+                    // and a socket that is already dead ignores it. The lease is the backstop, not the plan.
+                    letGoLocked("the radio is not reached: the renewal was lost", sendRelease = true)
                     return@synchronized
                 }
                 armRenewalLocked(hold, gen)
@@ -266,23 +337,64 @@ class PttLeaseStateMachine(
         val wasLive = state == State.Requesting || state == State.Keyed
         cancelTimersLocked()
         liveHold = null
-        if (wasLive) {
-            state = State.Releasing
-            if (sendRelease) send(PanelCommands.key(PTT_KEY, false))
-        } else {
-            state = State.Releasing
+        state = State.Releasing
+        if (wasLive && sendRelease) {
+            // Accepted means the socket queued the line. Refused means keep asking until the lease
+            // window has passed or a later press/shutdown gets one through. sendRelease is false only
+            // when the radio has already taken the key up itself (`err ptt released`).
+            if (send(PanelCommands.key(PTT_KEY, false))) carrierMayBeUp = false
+            else {
+                carrierMayBeUp = true
+                armUnkeyRetryLocked(generation)
+            }
         }
         this.reason = reason ?: this.reason
-        if (state == State.Releasing) {
-            val gen = generation
-            settleTask = scheduler.scheduleAt(clock.nowMs() + releaseSettleMs) {
-                synchronized(lock) {
-                    if (gen != generation) return@synchronized
-                    if (state == State.Releasing) settleLocked()
-                }
+        val gen = generation
+        settleTask = scheduler.scheduleAt(clock.nowMs() + releaseSettleMs) {
+            synchronized(lock) {
+                if (gen != generation) return@synchronized
+                if (state == State.Releasing) settleLocked()
             }
         }
         listener(state, this.reason)
+    }
+
+    /**
+     * One `key PTT 0` if one is still owed and this is not a live press. True when the socket took it.
+     * Called on the way into the next press and from [failSafe]/[release] after the hold has already ended
+     * in here, so the up-command cannot be overtaken by a down-command on the same thread.
+     */
+    private fun deliverUnkeyLocked(): Boolean {
+        if (!carrierMayBeUp) return true
+        if (state == State.Requesting || state == State.Keyed) return false
+        if (!send(PanelCommands.key(PTT_KEY, false))) return false
+        carrierMayBeUp = false
+        unkeyRetry?.cancel()
+        unkeyRetry = null
+        return true
+    }
+
+    /**
+     * Keep offering `key PTT 0` for about [PTT_LEASE_MS]. Each attempt is for this generation only:
+     * [press] retires it before sending the next down-command, under the same lock, so a retry cannot
+     * unkey a press that has already started. Twelve tries at 250 ms cover the radio's 3 s lease
+     * (`PTT_LEASE_MS` in `remote_server.c`) and then stop, rather than writing at a dead socket forever.
+     */
+    private fun armUnkeyRetryLocked(gen: Long, left: Int = UNKEY_RETRIES) {
+        if (left <= 0 || !carrierMayBeUp) return
+        unkeyRetry?.cancel()
+        unkeyRetry = scheduler.scheduleAt(clock.nowMs() + UNKEY_RETRY_MS) {
+            synchronized(lock) {
+                if (gen != generation || !carrierMayBeUp) return@synchronized
+                if (state == State.Requesting || state == State.Keyed) return@synchronized
+                if (send(PanelCommands.key(PTT_KEY, false))) {
+                    carrierMayBeUp = false
+                    unkeyRetry = null
+                    return@synchronized
+                }
+                armUnkeyRetryLocked(gen, left - 1)
+            }
+        }
     }
 
     private fun settleLocked() {
@@ -296,16 +408,24 @@ class PttLeaseStateMachine(
         capTask?.cancel()
         confirmTask?.cancel()
         settleTask?.cancel()
+        unkeyRetry?.cancel()
         renewTask = null
         capTask = null
         confirmTask = null
         settleTask = null
+        unkeyRetry = null
         generation++
     }
 
     private companion object {
         /** The key the radio's own page holds for the microphone (`BTN_TRIGGER_HAPPY4`). */
         const val PTT_KEY = "PTT"
+
+        /** How often to offer `key PTT 0` again after the socket refused one. */
+        const val UNKEY_RETRY_MS = 250L
+
+        /** 12 × 250 ms, just past the firmware's `PTT_LEASE_MS` of 3 s, then give the lease the last word. */
+        const val UNKEY_RETRIES = 12
 
         /** `err ptt released: no renewal from the page` / `... three minutes on the air`. */
         const val ERR_PTT_RELEASED = "ptt released"

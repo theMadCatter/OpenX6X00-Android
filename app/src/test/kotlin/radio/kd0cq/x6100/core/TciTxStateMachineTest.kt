@@ -78,7 +78,15 @@ class TciTxStateMachineTest {
         var failFramesFrom = Int.MAX_VALUE
         var failLinesFrom = Int.MAX_VALUE
 
+        /** The key line is refused and `trx:0,false;` is still accepted. */
+        var dropKey = false
+
+        /** `trx:0,false;` is refused, so a test can see the retry. */
+        var dropUnkey = false
+
         fun send(line: String): Boolean {
+            if (dropKey && line.startsWith("trx:0,true")) return false
+            if (dropUnkey && line == "trx:0,false;") return false
             if (lines.size + 1 >= failLinesFrom) return false
             lines += line
             return true
@@ -379,10 +387,40 @@ class TciTxStateMachineTest {
         assertFalse(m.keyed)
         assertEquals("the radio is not reached: the audio frame was lost", m.lastReason)
         assertEquals(1, mic.stops)
-        // The link is the thing that failed; the unkey is not worth waiting for, and the radio's own
-        // silence watchdog ends it in 500 ms whatever we do.
-        assertEquals(emptyList<String>(), wire.unkeys())
-        assertEquals(listOf("trx:0,true,tci;"), wire.lines)
+        // The frame is binary and the unkey is text. handle_cmd never refuses trx:0,false from the
+        // client that keyed (audit B01). TX_SILENCE_MS is the backstop when this line does not arrive,
+        // not a reason to skip it. The refused frame itself is not on the wire.
+        assertEquals(listOf("trx:0,false;"), wire.unkeys())
+        assertEquals(listOf("trx:0,true,tci;", "trx:0,false;"), wire.lines)
+        assertTrue(wire.frames.isEmpty())
+        assertFalse(m.owesUnkey)
+    }
+
+    @Test
+    fun aKeyTheSocketRefusesIsStillFollowedByAnUnkey() {
+        wire.dropKey = true
+        val m = machine()
+        assertFalse(m.press())
+        assertEquals(listOf("trx:0,false;"), wire.unkeys())
+        assertEquals(1, mic.stops)
+        assertFalse(m.keyed)
+        assertFalse(m.owesUnkey)
+    }
+
+    @Test
+    fun aRefusedUnkeyIsRetriedUntilTheSocketTakesIt() {
+        val m = machine()
+        m.press()
+        wire.dropUnkey = true
+        m.release()
+        assertTrue(m.owesUnkey)
+        assertTrue(wire.unkeys().isEmpty())
+        wire.dropUnkey = false
+        scheduler.advance(100) // UNKEY_RETRY_MS
+        assertEquals(listOf("trx:0,false;"), wire.unkeys())
+        assertFalse(m.owesUnkey)
+        scheduler.advance(5_000)
+        assertEquals(1, wire.unkeys().size)
     }
 
     // ---- fail-safe ----

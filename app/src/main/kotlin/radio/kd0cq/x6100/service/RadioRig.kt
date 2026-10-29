@@ -89,7 +89,9 @@ object RadioRigs {
                     phase == LinkPhase.CONNECTED -> audio.start()
                     !phase.online -> {
                         // The audio link is gone: whatever was being keyed with it is over.
-                        if (ptt.onAir) ptt.failSafe("the audio link to the radio dropped")
+                        // needsUnkey covers a session that already looks idle here because its
+                        // unkey was the write the socket refused.
+                        if (ptt.onAir || ptt.needsUnkey) ptt.failSafe("the audio link to the radio dropped")
                         audio.stop()
                     }
                 }

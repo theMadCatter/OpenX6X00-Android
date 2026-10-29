@@ -50,10 +50,18 @@ Where the app cannot be sure, it chooses *unkey*. If a write fails it assumes
 the radio may have seen it, and the next press takes a higher hold number
 (a number the radio has never seen cannot key anything — `ptt_down()` in
 `remote_server.c` refuses a hold that is not above the last one it honored).
-If the link drops while keyed it still attempts `key PTT 0` on the dead
-socket before giving up: a politely-closed socket takes it, a dead one loses
-nothing. `reset()` — the last thing a dying service does — sends the unkey
-itself if a hold was somehow still live, rather than walking away from one.
+A renewal the socket will not take is a release, and that release sends
+`key PTT 0` (or `trx:0,false;` when the lost write was a TX frame). The
+up-command is retried for about one firmware lease (`PTT_LEASE_MS`, 3 s) or
+one silence window (`TX_SILENCE_MS`, 500 ms). A retry is tied to the hold's
+generation, so it cannot unkey a press that started after it was asked for,
+and the next press sends any owed up-command before its down-command.
+`err ptt released` does not send another `key PTT 0`: `ptt_lease()` already
+took the key up. If the link drops while keyed, or while an up-command is
+still owed, the app still attempts the unkey before giving up: a
+politely-closed socket takes it, a dead one loses nothing. `reset()` — the
+last thing a dying service does — sends the unkey if a hold is still live
+or an earlier up-command never left, rather than walking away from one.
 
 ## Layers and the fail-safe path through them
 
@@ -72,13 +80,13 @@ The fail-safe reaches in from every layer that can observe a problem:
 
 | Layer | Event | What runs |
 |---|---|---|
-| Activity | `onStop()` | `rig.failSafe("the app went to the background")` |
-| Service | `onDestroy()`, `onTaskRemoved()` | same, in the documented shutdown order below |
-| Rig | Panel or TCI socket closed / failed | `failSafe(...)` if on air |
-| Client | a write the socket would not take (`sendChecked` false) | the state machine releases — a lost renewal is a release |
-| State machine | its own timers: key-confirmation, hard cap, silence, mic stall | releases with a reason |
-| Radio | `tx 0`, `err ptt released`, any PTT refusal | releases; renewals stop |
-| Radio | controls taken (`ctl ... MINE` by someone else) | `controlLost()` releases — the other holder can change the radio under a live carrier |
+| Activity | `onStop()` | `ptt.wentToBackground()`, which fail-safes both paths |
+| Service | `onDestroy()`, `onTaskRemoved()` | same, in the documented shutdown order below, and `onDestroy` disconnects only after that |
+| Rig | Panel or TCI socket closed / failed | `failSafe(...)` if on air, or if an up-command is still owed |
+| Client | a write the socket would not take (`sendChecked` false) | the state machine releases and sends the up-command; a lost renewal is a release on the wire, not only in memory |
+| State machine | its own timers: key-confirmation, hard cap, silence, mic stall | releases with a reason, and sends the up-command |
+| Radio | `tx 0`, `err ptt released`, any PTT refusal | releases; renewals stop. `err ptt released` does not send a second `key PTT 0` |
+| Radio | controls taken by someone else | both paths unkey. `ctl tci 0` is this app's own phone-mic holder (`ctl_tell` sets MINE only for this panel slot) and does not unkey it. `ctl local` does, because `ctl_local_input()` moves the holder while the radio is still transmitting |
 | UI | thumb leaves the button | release, in a `finally`, even if the press threw |
 
 The shutdown order is fixed (`Rig.shutdown`): `ptt.failSafe(reason)` first,
@@ -197,15 +205,24 @@ silence unkey.
 
 ### Threading
 
-- **The link's own thread answers chronos.** OkHttp's listener thread runs
-  `TciTxStateMachine.onChrono` directly. The renewal handler on the main
-  looper would add UI-frame jitter to a 21.3 ms deadline; the chrono answer
-  has no UI in it and takes a lock instead.
+- **Chronos are not answered on the OkHttp thread.** `OkHttpTciClient` posts
+  each binary frame into a `SharedFlow` (`tryEmit`, `DROP_OLDEST`, 128 slots).
+  `RadioLink` collects that flow on `Dispatchers.IO` and the audio pipeline
+  calls `TciTxStateMachine.onFrame` from there. A chrono the flow drops is a
+  gap; the silence watchdog and the radio's `TX_SILENCE_MS` both unkey.
+  Panel text (`tx`, `ctl`, `err`) shares one 512-slot `DROP_OLDEST` flow with
+  spectrum and screen frames. A dropped `tx 0` or `ctl` is the residual case
+  this design does not close: the lease machine will not re-key a hold the
+  radio has already ended, but a phone-mic session that never sees `ctl local`
+  stays up until the button, the 170 s cap, or the radio's 180 s limit.
 - **Slow timers run on the main looper** (`HandlerPttScheduler`): renewals,
-  caps, settles. They are 1 s-class and their effects are UI-visible.
+  caps, settles, and unkey retries. Renewals are 1 s-class; an unkey retry is
+  100 ms (TCI) or 250 ms (Panel).
 - **Both state machines hold one monitor around every mutation.** Releases
-  arrive from the socket thread, the main thread and timer callbacks at once;
-  generation checks make the ordering not matter.
+  arrive from the UI thread, the main-looper timers, and the IO collectors
+  that read the sockets. Generation checks make the ordering not matter.
+  `send` runs under that lock. OkHttp's `WebSocket.send` queues; it does not
+  re-enter the listener before returning.
 - **Audio callbacks are the framework's** (AudioTrack/AudioRecord internal
   threads); the app's threads only fill and drain their buffers, never block
   on the network.
@@ -219,11 +236,12 @@ with a token, role and transmit permission, and from then on `auth TOKEN`
 reconnects *this* session without asking again. A `paired` answer without a
 usable session token is a refusal, not a pairing; the token is cleared on
 `unpair` and never logged. Losing the controls while keyed is a fail-safe
-event, not a notification.
+event on both transmit paths, not a notification. `ctl tci` is the phone-mic
+path's own holder and is not that event.
 
 ## Testing
 
-88 JUnit4 tests, plain JVM, no Robolectric, no device — driven by
+146 JUnit4 tests, plain JVM, no Robolectric, no device — driven by
 `ManualClock`/`ManualScheduler`, which make time an argument. They cover:
 renewal cadence and exact wire text; every fail-safe entry point (release,
 link loss, control loss, `err ptt released`, background, hard cap, lost

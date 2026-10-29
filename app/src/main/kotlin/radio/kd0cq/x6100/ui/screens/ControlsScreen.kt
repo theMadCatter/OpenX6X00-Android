@@ -68,7 +68,10 @@ fun ControlsScreen(viewModel: RadioViewModel) {
             OutlinedButton(onClick = { viewModel.releaseControl() }) { Text("Give control back") }
         }
 
-        TransmitSection(viewModel, role.canOperate)
+        // The button needs TX permission as well as a role that may operate. `role operate 0`
+        // is what remote_server.c sends when the session's tx_ok flag is clear; the knobs below
+        // stay on canOperate, because tuning is not the key.
+        TransmitSection(viewModel, role.canOperate, role.txAllowed)
 
         val s = state
         Text(s?.let { "${it.freqHz} Hz  ${it.modeLabel}" } ?: "no state yet",
@@ -153,7 +156,7 @@ fun ControlsScreen(viewModel: RadioViewModel) {
  * microphone is never quietly substituted).
  */
 @Composable
-private fun TransmitSection(viewModel: RadioViewModel, enabled: Boolean) {
+private fun TransmitSection(viewModel: RadioViewModel, enabled: Boolean, txAllowed: Boolean) {
     val keyed by viewModel.pttKeyed.collectAsState()
     val refusal by viewModel.pttRefusal.collectAsState()
     val audio by viewModel.audioRunning.collectAsState()
@@ -171,15 +174,18 @@ private fun TransmitSection(viewModel: RadioViewModel, enabled: Boolean) {
     }
 
     Text("Transmit", style = MaterialTheme.typography.titleMedium)
+    // The gesture, not the Button click, is the key. Gating only `enabled` would leave pointerInput
+    // live for a session whose role may operate but whose tx_ok flag is clear.
+    val mayKey = enabled && txAllowed
     Button(
         onClick = { },
-        enabled = enabled,
+        enabled = mayKey,
         colors = ButtonDefaults.buttonColors(
             containerColor = if (keyed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
             contentColor = if (keyed) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
         ),
-        modifier = Modifier.fillMaxWidth().height(88.dp).pointerInput(enabled) {
-            if (!enabled) return@pointerInput
+        modifier = Modifier.fillMaxWidth().height(88.dp).pointerInput(mayKey) {
+            if (!mayKey) return@pointerInput
             detectTapGestures(onPress = {
                 viewModel.pressPtt()
                 try {

@@ -101,6 +101,13 @@ class LeasePttController(
     val onAir: Boolean get() = lease.keyed || tx.keyed
 
     /**
+     * An up-command is still owed after the machine has already left the press. Service shutdown
+     * and a dropped audio link read this so they retry `key PTT 0` / `trx:0,false;` rather than
+     * treating Releasing as "already off the air".
+     */
+    val needsUnkey: Boolean get() = lease.owesUnkey || tx.owesUnkey
+
+    /**
      * The link's own events, so nothing has to remember to feed us. The phases and the two event flows
      * are shared flows, and this is only another listener on them.
      */
@@ -113,14 +120,21 @@ class LeasePttController(
         }
         scope.launch {
             panel.phase.collect { phase ->
-                // Nothing on the air, nothing to let go of: and the operator should not be shown a
-                // dropped transmission that never started.
-                if (!phase.online && lease.keyed) lease.linkLost("the link to the radio dropped")
+                // Both paths. The panel socket is how a phone-mic transmission learns that the
+                // local operator took the controls (ctl_tell is a panel line). Losing it while
+                // either path is up, or while an unkey is still owed, has to say so on the wire.
+                // Keyed is already false once a hold is Releasing, which is why owesUnkey is here:
+                // a renewal that failed its up-command used to make this collector do nothing.
+                if (!phase.online && (onAir || lease.owesUnkey || tx.owesUnkey)) {
+                    failSafe("the link to the radio dropped")
+                }
             }
         }
         scope.launch {
             tci.phase.collect { phase ->
-                if (!phase.online && tx.keyed) tx.linkLost("the audio link to the radio dropped")
+                if (!phase.online && (tx.keyed || tx.owesUnkey)) {
+                    tx.linkLost("the audio link to the radio dropped")
+                }
             }
         }
     }
@@ -164,7 +178,18 @@ class LeasePttController(
     /** What the radio said on the Panel link that concerns the key. */
     fun onPanelEvent(event: PanelEvent) {
         when (event) {
-            is PanelEvent.Transmitting -> lease.radioTx(event.on)
+            is PanelEvent.Transmitting -> {
+                lease.radioTx(event.on)
+                // The panel's `tx 0` is the same carrier the TCI server reports with `trx:0,false`
+                // (`state_follow` / the panel's tx line). A dropped TCI text frame must not leave
+                // this phone's microphone feeding a session the radio has already ended. Only once
+                // pacing has started: a `tx 0` still in the socket buffer from the previous over
+                // would otherwise cancel a key that has not been confirmed yet. The confirm and
+                // silence timers still end a start the radio never took.
+                if (!event.on && tx.currentState == TciTxStateMachine.State.Keyed) {
+                    tx.onTransmitting(false)
+                }
+            }
 
             is PanelEvent.Failure -> {
                 // The refusal's own words, or "ptt released: ...": the machine knows which.
@@ -175,16 +200,34 @@ class LeasePttController(
                 if (ours) publish(lease.lastReason)
             }
 
-            is PanelEvent.ControlHeld ->
-                if (lease.keyed && !event.info.mine) lease.controlLost(event.info.holder)
+            is PanelEvent.ControlHeld -> onControl(event.info)
 
             is PanelEvent.Role ->
-                if (!event.role.canOperate && lease.keyed) {
-                    lease.failSafe("this session may not transmit any more")
+                // canOperate is the role word alone. `role operate 0` is a session the admin has
+                // refused TX to (`tx_ok` in remote_server.c). Either one ends a live carrier,
+                // on both paths: the phone-mic path used to ignore this line entirely.
+                if (onAir && (!event.role.canOperate || !event.role.txAllowed)) {
+                    failSafe("this session may not transmit any more")
                 }
 
             else -> Unit
         }
+    }
+
+    /**
+     * Who holds the radio's controls, from `ctl WHO MINE`.
+     *
+     * `ctl_tell()` in `remote_server.c` sets MINE only when the holder is this panel client
+     * (`CTL_BROWSER` and our slot). A transmission keyed with `trx:0,true,tci;` is held as `CTL_TCI`,
+     * so the panel line is `ctl tci 0` — mine is 0, and that holder is us, not someone else.
+     * `ctl_local_input()` moves the holder to `local` even while the radio is transmitting, and the
+     * TCI server does not unkey when that happens (audit B01 is why `trx:0,false` is never refused).
+     * The lease path already let go on `!mine`. The phone-mic path used to ignore the line, so the
+     * carrier stayed up under the operator at the radio.
+     */
+    private fun onControl(info: radio.kd0cq.x6100.net.ControlInfo) {
+        if (lease.keyed && !info.mine) lease.controlLost(info.holder)
+        if (tx.keyed && !info.isTci) tx.failSafe("the radio is controlled by ${info.holder}")
     }
 
     /** Back to a clean slate after the link went down for good: the service's `onDestroy` ends here. */
