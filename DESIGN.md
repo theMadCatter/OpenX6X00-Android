@@ -210,11 +210,17 @@ silence unkey.
   `RadioLink` collects that flow on `Dispatchers.IO` and the audio pipeline
   calls `TciTxStateMachine.onFrame` from there. A chrono the flow drops is a
   gap; the silence watchdog and the radio's `TX_SILENCE_MS` both unkey.
-  Panel text (`tx`, `ctl`, `err`) shares one 512-slot `DROP_OLDEST` flow with
-  spectrum and screen frames. A dropped `tx 0` or `ctl` is the residual case
-  this design does not close: the lease machine will not re-key a hold the
-  radio has already ended, but a phone-mic session that never sees `ctl local`
-  stays up until the button, the 170 s cap, or the radio's 180 s limit.
+- **Panel text and panel pictures do not share a queue.** `ctl`, `tx`, `role`,
+  `err`, `state`, and every other text line go through `PanelEventBus` into an
+  unlimited queue and are emitted in order. Spectrum and screen frames are a
+  separate one-deep replay: a slow collector keeps the latest picture and
+  misses the ones in between, and that miss cannot evict a control line.
+  A socket generation retires lines still queued when the socket dies, so a
+  late `tx 0` cannot release the next press. The new socket is the resync:
+  the firmware sends `role` and `ctl` on the handshake, `auth` asks again, and
+  `panel 1` sets `panel_fresh` (only on the false-to-true edge) which pushes
+  the whole `state` line, including `tx`. There is no other state-query
+  command, and a live socket is not toggled off and on to ask again.
 - **Slow timers run on the main looper** (`HandlerPttScheduler`): renewals,
   caps, settles, and unkey retries. Renewals are 1 s-class; an unkey retry is
   100 ms (TCI) or 250 ms (Panel).
@@ -241,7 +247,7 @@ path's own holder and is not that event.
 
 ## Testing
 
-146 JUnit4 tests, plain JVM, no Robolectric, no device — driven by
+150 JUnit4 tests, plain JVM, no Robolectric, no device — driven by
 `ManualClock`/`ManualScheduler`, which make time an argument. They cover:
 renewal cadence and exact wire text; every fail-safe entry point (release,
 link loss, control loss, `err ptt released`, background, hard cap, lost
@@ -251,7 +257,9 @@ case; press-while-releasing honored, press-while-live refused; TX_AUDIO only
 between key and unkey, only in the accepted shape, zero-filled to length;
 unkey on socket drop; chrono answering and the silence/mic-stall watchdogs;
 frame round-trip against the raw `TciProtocol` codec; pairing parsing and
-token handling. Tests were written from the firmware's real lines and frame
+token handling; a flood of spectrum and screen frames leaving `ctl`, `tx`,
+`role` and `err` in order, with only the latest picture retained. Tests were
+written from the firmware's real lines and frame
 layouts — when a test and the firmware disagree, the test is wrong, but every
 disagreement so far was a bug.
 

@@ -41,8 +41,20 @@ enum class LinkPhase {
 /** The panel WebSocket: the radio's state, the spectrum, the apps, pairing and control. */
 interface PanelClient : Closeable {
 
-    /** What the radio said, in the order it arrived. */
+    /**
+     * Text from the radio, in the order it arrived: `ctl`, `tx`, `role`, `err`, `state`, and the
+     * rest of the panel's lines. This flow does not carry spectrum or screen frames, and it does
+     * not drop a line to make room for one.
+     */
     val events: kotlinx.coroutines.flow.Flow<PanelEvent>
+
+    /**
+     * Spectrum and screen frames only, conflated to the latest. A collector that is behind misses
+     * intermediate pictures and still has the newest one. Missing a frame here never takes a
+     * control or PTT line with it.
+     */
+    val frames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
 
     /** The link's phase, and the last word about why it is not up. */
     val phase: kotlinx.coroutines.flow.StateFlow<LinkPhase>

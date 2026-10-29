@@ -94,6 +94,22 @@ object PanelCommands {
     /** Watch the radio's own state, spectrum and apps: this is what makes a connection a panel client. */
     fun panel(on: Boolean) = "panel ${if (on) 1 else 0}"
 
+    /**
+     * What a new panel socket asks for once it is open.
+     *
+     * `remote_server.c` sends `role` and `ctl` on the WebSocket handshake, and again for `auth`.
+     * `panel 1` sets `panel_fresh` only when this socket was not already subscribed (`on != c->panel`),
+     * which is true of every new socket and false of a second `panel 1` on the same one. `panel_fresh`
+     * is the resync: modes, bands, the plan, and the whole `state` line, whose `tx` field is the
+     * carrier. There is no separate "send state" command. Toggling `panel 0` then `panel 1` on a
+     * live socket would ask again, and it is not used here: picture frames no longer share a queue
+     * with these lines, so a waterfall does not create a gap to heal.
+     */
+    fun reconnect(token: String?): List<String> = buildList {
+        if (!token.isNullOrEmpty()) add(auth(token))
+        add(panel(on = true))
+    }
+
     /** The radio's screen as JPEG frames; the waterfall page turns them off to save the bandwidth. */
     fun screen(on: Boolean) = "screen ${if (on) 1 else 0}"
 
