@@ -7,14 +7,11 @@ package radio.kd0cq.x6100.net
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -41,10 +38,11 @@ class OkHttpPanelClient(
     private val handshakeMs: Long = 8_000,
 ) : PanelClient {
 
-    private val sink = MutableSharedFlow<PanelEvent>(
-        extraBufferCapacity = 512,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
+    /**
+     * Text and pictures are separate lanes. A spectrum flood used to evict `ctl` and `tx` from the
+     * one shared drop-oldest buffer; [PanelEventBus] is that split.
+     */
+    private val bus = PanelEventBus(scope)
     private val linkPhase = MutableStateFlow(LinkPhase.IDLE)
     private val error = MutableStateFlow<String?>(null)
 
@@ -54,9 +52,14 @@ class OkHttpPanelClient(
     @Volatile
     private var wanted: RadioEndpoint? = null
 
+    /** The generation of the socket [stayConnected] has open, so [disconnect] can retire it. */
+    @Volatile
+    private var connectionGeneration = 0
+
     private var pingNumber = 0L
 
-    override val events: Flow<PanelEvent> = sink.asSharedFlow()
+    override val events: Flow<PanelEvent> = bus.events
+    override val frames: Flow<PanelEvent> = bus.frames
     override val phase: StateFlow<LinkPhase> = linkPhase.asStateFlow()
     override val lastError: StateFlow<String?> = error.asStateFlow()
 
@@ -72,6 +75,8 @@ class OkHttpPanelClient(
     override fun disconnect() {
         synchronized(this) {
             wanted = null
+            // Retire before cancelling the socket, so a last onMessage cannot join the next press.
+            bus.closeConnection(connectionGeneration)
             worker?.cancel()
             worker = null
             socket?.cancel()
@@ -111,20 +116,29 @@ class OkHttpPanelClient(
             linkPhase.value = LinkPhase.CONNECTING
             val opened = CompletableDeferred<Boolean>()
             val closed = CompletableDeferred<Unit>()
-            val ws = http.newWebSocket(Request.Builder().url(endpoint.panelUrl).build(), Listener(opened, closed))
+            // One generation per socket. closeConnection retires it so a line still queued at
+            // disconnect cannot land on the next press. The handshake of the new socket, and the
+            // lines below, are the resync.
+            val generation = bus.openConnection()
+            connectionGeneration = generation
+            val ws = http.newWebSocket(
+                Request.Builder().url(endpoint.panelUrl).build(),
+                Listener(generation, opened, closed),
+            )
             socket = ws
             val up = withTimeoutOrNull(handshakeMs) { opened.await() } == true
             if (up && closed.isActive) {
                 attempt = 0
                 linkPhase.value = if (tokens.token != null) LinkPhase.PAIRED else LinkPhase.CONNECTED
-                tokens.token?.let { send(PanelCommands.auth(it)) }
-                send(PanelCommands.panel(on = true))
+                // auth (when we have a token) and panel 1. panel_fresh then sends the whole state.
+                for (line in PanelCommands.reconnect(tokens.token)) send(line)
                 heartbeat(ws, closed)
             } else {
                 ws.cancel()
                 error.value = error.value ?: "no answer from ${endpoint.panelUrl}"
             }
             socket = null
+            bus.closeConnection(generation)
             if (wanted != endpoint) break
             linkPhase.value = LinkPhase.LOST
             delay(reconnectDelayMs(attempt++))
@@ -148,6 +162,7 @@ class OkHttpPanelClient(
     }
 
     private inner class Listener(
+        private val generation: Int,
         private val opened: CompletableDeferred<Boolean>,
         private val closed: CompletableDeferred<Unit>,
     ) : WebSocketListener() {
@@ -173,18 +188,18 @@ class OkHttpPanelClient(
 
                 else -> Unit
             }
-            sink.tryEmit(event)
+            bus.post(generation, event)
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             val raw = bytes.toByteArray()
             val spectrum = PanelProtocol.parseSpectrum(raw)
             if (spectrum != null) {
-                sink.tryEmit(PanelEvent.Spectrum(spectrum))
+                bus.post(generation, PanelEvent.Spectrum(spectrum))
                 return
             }
             val screen = PanelProtocol.parseScreenFrame(raw)
-            if (screen != null) sink.tryEmit(PanelEvent.Screen(screen))
+            if (screen != null) bus.post(generation, PanelEvent.Screen(screen))
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
