@@ -26,8 +26,9 @@ object SystemClockPttClock : PttClock {
  *
  * They are the slow timers — a PTT renewal once a second, a cap after minutes, a settle after a
  * second and a half — and each one only writes a line to a socket, which is what the main thread is
- * for. The fast path is not here: a `TX_CHRONO` is answered on the link's own thread, because 21.3 ms
- * is shorter than a frame on a busy UI and a missed tick is what makes the radio unkey us.
+ * for. The fast path is not here: a `TX_CHRONO` is answered on the IO collector that reads the
+ * TCI audio flow, not on this looper and not inside OkHttp's callback. 21.3 ms is shorter than a
+ * frame on a busy UI, and a missed tick is what makes the radio unkey us.
  */
 class HandlerPttScheduler(
     looper: Looper = Looper.getMainLooper(),

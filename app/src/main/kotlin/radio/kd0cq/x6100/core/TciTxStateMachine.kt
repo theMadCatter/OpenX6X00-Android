@@ -100,6 +100,23 @@ class TciTxStateMachine(
     private var limitTask: PttTask? = null
     private var silenceTask: PttTask? = null
 
+    /**
+     * A `trx:0,false;` the socket did not take. Same rule as the Panel lease: a retry is for this
+     * generation only, so it cannot unkey a transmission that started after it was asked for.
+     */
+    private var unkeyRetry: PttTask? = null
+
+    /**
+     * `trx:0,true,tci;` may have reached the server and `trx:0,false;` has not been accepted since.
+     *
+     * `handle_cmd` in `tci_server.c` never refuses a release from the client that keyed ("refusing
+     * left the radio on the air until the 180 s limit", audit B01). A lost TX frame used to call
+     * [letGoLocked] with `sendUnkey = false` and wait for `TX_SILENCE_MS`. That is the right backstop
+     * when the socket is dead. It is the wrong plan when the text socket can still take `trx:0,false;`,
+     * which is a different write from the binary frame that just failed.
+     */
+    private var carrierMayBeUp = false
+
     /** When the last pacing frame came: the gap the watchdog and the radio both count. */
     private var lastChronoMs = 0L
 
@@ -116,6 +133,14 @@ class TciTxStateMachine(
     val currentState: State get() = synchronized(lock) { state }
 
     val lastReason: String? get() = synchronized(lock) { reason }
+
+    /**
+     * The radio may still be in our TCI session and this machine has already left it.
+     * Link loss uses this: [keyed] is false the moment [letGoLocked] runs, which used to be before
+     * anyone retried an unkey the socket had refused.
+     */
+    val owesUnkey: Boolean
+        get() = synchronized(lock) { carrierMayBeUp && state == State.Idle }
 
     /** Frames of our microphone the radio has heard, and those that were silence. */
     fun framesSent(): Long = synchronized(lock) { framesSent }
@@ -140,13 +165,27 @@ class TciTxStateMachine(
             listener(State.Idle, reason)
             return false
         }
+        // An unkey still owed from the previous session goes out before this key. `trx:0,false;`
+        // from the client that owns the session ends it (tci_server.c); one that arrives after the
+        // new `trx:0,true,tci;` would end the press just started.
+        deliverUnkeyLocked()
         if (!send(TciCommands.key(withAudio = true))) {
+            // The key line was not queued. Send the unkey anyway: a true,tci the radio did see
+            // stays up until trx:0,false, TX_SILENCE_MS, or the socket closing (tx_session_end).
+            // The unkey is a no-op reply when this client does not own a session.
+            if (!send(TciCommands.unkey())) {
+                carrierMayBeUp = true
+                armUnkeyRetryLocked(generation)
+            } else {
+                carrierMayBeUp = false
+            }
             mic.stop()
             reason = "the radio is not reached: no transmission"
             listener(State.Idle, reason)
             return false
         }
         generation++
+        carrierMayBeUp = true
         state = State.Starting
         reason = null
         chronos = 0
@@ -218,7 +257,10 @@ class TciTxStateMachine(
                 return true
             }
             if (!sendFrame(out)) {
-                letGoLocked("the radio is not reached: the audio frame was lost", sendUnkey = false)
+                // The binary frame was refused. The text socket is a separate write: `trx:0,false;`
+                // is how this client ends the session immediately. TX_SILENCE_MS (500) is what the
+                // radio does if that line never arrives, not a reason to skip sending it.
+                letGoLocked("the radio is not reached: the audio frame was lost", sendUnkey = true)
                 return true
             }
             framesSent++
@@ -233,12 +275,23 @@ class TciTxStateMachine(
      * of audio stops with it.
      */
     fun onTransmitting(on: Boolean) = synchronized(lock) {
-        if (!on && state != State.Idle) letGoLocked("the radio ended the transmission", sendUnkey = true)
+        if (!on && state != State.Idle) {
+            letGoLocked("the radio ended the transmission", sendUnkey = true)
+            // state_follow broadcasts trx:0,false when the radio leaves TX, and tx_session_end
+            // does the same when our session is the thing that ended. The carrier is down; a retry
+            // of our unkey would only repeat a line the server has already acted on.
+            carrierMayBeUp = false
+            unkeyRetry?.cancel()
+            unkeyRetry = null
+        }
     }
 
     /** The operator let go. */
     fun release() = synchronized(lock) {
-        if (state == State.Idle) return
+        if (state == State.Idle) {
+            deliverUnkeyLocked()
+            return
+        }
         letGoLocked(null, sendUnkey = true)
     }
 
@@ -249,6 +302,9 @@ class TciTxStateMachine(
      */
     fun failSafe(reason: String) = synchronized(lock) {
         if (state == State.Idle) {
+            // Idle is also where a lost frame leaves us when its unkey was refused. Ask again
+            // before handing the microphone back: the unkey is the line the radio acts on.
+            deliverUnkeyLocked()
             mic.stop()
             this.reason = reason
             listener(State.Idle, reason)
@@ -267,9 +323,19 @@ class TciTxStateMachine(
      */
     fun reset() = synchronized(lock) {
         val wasLive = state != State.Idle
+        val owed = carrierMayBeUp
         cancelTimersLocked()
+        // Unkey before stopping the microphone. stop() joins the capture thread for up to 500 ms;
+        // doing that first held the carrier up for the whole wait. A session whose unkey was
+        // refused is included: reset() used to send nothing once state was already Idle.
+        if (wasLive || owed) {
+            if (send(TciCommands.unkey())) carrierMayBeUp = false
+            else {
+                carrierMayBeUp = true
+                armUnkeyRetryLocked(generation)
+            }
+        }
         mic.stop()
-        if (wasLive) send(TciCommands.unkey())
         state = State.Idle
         reason = null
         listener(state, null)
@@ -310,20 +376,62 @@ class TciTxStateMachine(
     private fun letGoLocked(reason: String?, sendUnkey: Boolean) {
         val wasLive = state != State.Idle
         cancelTimersLocked()
-        mic.stop()
         state = State.Idle
         this.reason = reason ?: this.reason
-        if (wasLive && sendUnkey) send(TciCommands.unkey())
+        // The unkey goes out before the microphone is joined. The join waits up to 500 ms for
+        // AudioRecord.read to return; the radio would stay keyed for that whole wait if the line
+        // were sent afterwards, which is the whole of TX_SILENCE_MS.
+        if (wasLive && sendUnkey) {
+            if (send(TciCommands.unkey())) carrierMayBeUp = false
+            else {
+                carrierMayBeUp = true
+                armUnkeyRetryLocked(generation)
+            }
+        }
+        mic.stop()
         listener(state, this.reason)
+    }
+
+    /** One `trx:0,false;` if one is still owed and no session is live. True when the socket took it. */
+    private fun deliverUnkeyLocked(): Boolean {
+        if (!carrierMayBeUp || state != State.Idle) return !carrierMayBeUp
+        if (!send(TciCommands.unkey())) return false
+        carrierMayBeUp = false
+        unkeyRetry?.cancel()
+        unkeyRetry = null
+        return true
+    }
+
+    /**
+     * Offer `trx:0,false;` again for about [TX_SILENCE_MS]. The server unkeys a silent session at
+     * 500 ms; these retries cover that window for a text line the first write did not queue.
+     * A new [press] retires [generation] before its key, so a late retry cannot end it.
+     */
+    private fun armUnkeyRetryLocked(gen: Long, left: Int = UNKEY_RETRIES) {
+        if (left <= 0 || !carrierMayBeUp) return
+        unkeyRetry?.cancel()
+        unkeyRetry = scheduler.scheduleAt(clock.nowMs() + UNKEY_RETRY_MS) {
+            synchronized(lock) {
+                if (gen != generation || !carrierMayBeUp || state != State.Idle) return@synchronized
+                if (send(TciCommands.unkey())) {
+                    carrierMayBeUp = false
+                    unkeyRetry = null
+                    return@synchronized
+                }
+                armUnkeyRetryLocked(gen, left - 1)
+            }
+        }
     }
 
     private fun cancelTimersLocked() {
         confirmTask?.cancel()
         limitTask?.cancel()
         silenceTask?.cancel()
+        unkeyRetry?.cancel()
         confirmTask = null
         limitTask = null
         silenceTask = null
+        unkeyRetry = null
         generation++
     }
 
@@ -334,5 +442,13 @@ class TciTxStateMachine(
         val out = ShortArray(count)
         System.arraycopy(got, 0, out, 0, n)
         return out
+    }
+
+    private companion object {
+        /** How often to offer `trx:0,false;` again after the socket refused one. */
+        const val UNKEY_RETRY_MS = 100L
+
+        /** 6 × 100 ms, just past the firmware's TX_SILENCE_MS of 500 ms. */
+        const val UNKEY_RETRIES = 6
     }
 }
