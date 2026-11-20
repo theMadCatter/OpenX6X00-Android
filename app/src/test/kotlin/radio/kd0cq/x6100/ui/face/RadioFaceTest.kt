@@ -132,6 +132,33 @@ class RadioFaceTest {
     }
 
     @Test
+    fun landscapeScopeGivesTheWaterfallAboutThreeQuarters() {
+        // 240 px stands in for a phone-landscape scope after the header and the key row.
+        // The waterfall has to be about three quarters of that pane, and the trace still
+        // tall enough that the Zoom chip sits above the frequency ticks.
+        val split = RadioFace.scopeSplit(heightPx = 240f, scalePx = 16f, planPx = 14f, waterfallShare = 0.73f, zoomGuardPx = 24f)
+        val share = split.waterfallPx / 240f
+        assertTrue(share in 0.68f..0.76f)
+        assertTrue(split.spectrumPx >= 24f)
+        val portrait = RadioFace.scopeSplit(300f, 16f, 14f, waterfallShare = 0f, zoomGuardPx = 24f)
+        assertEquals(108f, portrait.spectrumPx, 0.5f)
+    }
+
+    @Test
+    fun keyNamesPackOntoRowsThatFitTheWidth() {
+        val names = listOf("GEN", "KEY", "DFN", "BAND_DOWN", "BAND_UP", "APP", "MSG")
+        val rows = RadioFace.packKeyRows(names, widthDp = 180f)
+        assertTrue(rows.size >= 2)
+        assertTrue(rows.flatten() == names)
+        rows.forEach { row ->
+            val width = row.sumOf { it.length * 7.5 + 26.0 }
+            assertTrue(width <= 180.0 + 26.0) // one chip may be wider than the view on its own
+        }
+        assertTrue(rows.flatten().contains("MSG"))
+        assertTrue(rows.all { line -> line.all { !it.endsWith("MS") || it == "MSG" } })
+    }
+
+    @Test
     fun scaleLabelsStayInsideTheViewAndDoNotStack() {
         assertEquals("14.060", RadioFace.scaleLabel(14_060_000))
         val lefts = RadioFace.placeScaleLabels(

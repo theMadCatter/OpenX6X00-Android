@@ -123,38 +123,40 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
 
     BoxWithConstraints(Modifier.fillMaxSize().background(RfGuru.bg)) {
         val landscape = maxWidth > maxHeight
-        // A phone on its side is about 400 dp tall. The roomy 78 dp meter leaves the scope
-        // with nothing, and the group strip then sits on the band plan.
-        val short = maxHeight < 520.dp
-        Column(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
-            if (landscape) {
-                LandscapeOperating(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    short = short,
-                    viewModel = viewModel,
-                    state = radio,
-                    meter = meter,
-                    tx = tx,
-                    bands = bands,
-                    plan = plan,
-                    spots = spots,
-                    frame = frame,
-                    cw = cw.lastOrNull(),
-                    canOperate = canOperate,
-                    controlMine = control.mine,
-                    controlFree = control.free,
-                    controlTci = control.isTci,
-                    keyed = keyed,
-                    audio = audio,
-                    freqGroup = freqGroup,
-                    page = page,
-                    onFreqGroup = { freqGroupOrdinal = it.ordinal },
-                    onKey = ::onKey,
-                    onGroup = { pageIndex = RadioFace.groupStartIndex(it) },
-                    onPlaceholder = { pending = it },
-                    onPair = { onNavigate("pairing") },
-                )
-            } else {
+        if (landscape) {
+            // Phone landscape is only ~360–412 dp tall. PTT sits beside the keys, and the
+            // header is one band, so the scope can keep most of that height for the waterfall.
+            LandscapeOperating(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 2.dp),
+                viewModel = viewModel,
+                state = radio,
+                meter = meter,
+                tx = tx,
+                bands = bands,
+                plan = plan,
+                spots = spots,
+                frame = frame,
+                cw = cw.lastOrNull(),
+                canOperate = canOperate,
+                mayKey = mayKey,
+                controlMine = control.mine,
+                controlFree = control.free,
+                controlTci = control.isTci,
+                keyed = keyed,
+                audio = audio,
+                micRefused = micRefused,
+                onMicRefused = { micRefused = it },
+                note = refusal ?: audioProblem,
+                freqGroup = freqGroup,
+                page = page,
+                onFreqGroup = { freqGroupOrdinal = it.ordinal },
+                onKey = ::onKey,
+                onGroup = { pageIndex = RadioFace.groupStartIndex(it) },
+                onPlaceholder = { pending = it },
+                onPair = { onNavigate("pairing") },
+            )
+        } else {
+            Column(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
                 PortraitOperating(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     viewModel = viewModel,
@@ -181,17 +183,16 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                     onPlaceholder = { pending = it },
                     onPair = { onNavigate("pairing") },
                 )
+                TransmitRow(
+                    viewModel = viewModel,
+                    mayKey = mayKey,
+                    canOperate = canOperate,
+                    keyed = keyed,
+                    micRefused = micRefused,
+                    onMicRefused = { micRefused = it },
+                    note = refusal ?: audioProblem,
+                )
             }
-            TransmitRow(
-                viewModel = viewModel,
-                mayKey = mayKey,
-                canOperate = canOperate,
-                keyed = keyed,
-                micRefused = micRefused,
-                onMicRefused = { micRefused = it },
-                note = refusal ?: audioProblem,
-                pttHeight = if (short) 52.dp else 64.dp,
-            )
         }
     }
 
@@ -241,7 +242,6 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
 @Composable
 private fun LandscapeOperating(
     modifier: Modifier,
-    short: Boolean,
     viewModel: RadioViewModel,
     state: RadioState?,
     meter: Double,
@@ -252,11 +252,15 @@ private fun LandscapeOperating(
     frame: radio.kd0cq.x6100.net.SpectrumFrame?,
     cw: String?,
     canOperate: Boolean,
+    mayKey: Boolean,
     controlMine: Boolean,
     controlFree: Boolean,
     controlTci: Boolean,
     keyed: Boolean,
     audio: Boolean,
+    micRefused: Boolean,
+    onMicRefused: (Boolean) -> Unit,
+    note: String?,
     freqGroup: FreqGroup,
     page: radio.kd0cq.x6100.ui.face.FacePage,
     onFreqGroup: (FreqGroup) -> Unit,
@@ -265,34 +269,14 @@ private fun LandscapeOperating(
     onPlaceholder: (String) -> Unit,
     onPair: () -> Unit,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        // The scope is the only weighted child, so it keeps whatever the status, the frequency
-        // and the keys do not use. On a short landscape that leftover used to be the scale row
-        // alone, and GEN drew on top of the band plan.
-        Row(
-            Modifier.fillMaxWidth().height(if (short) 64.dp else 78.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Column(
-                Modifier.weight(1.1f).fillMaxHeight().background(RfGuru.bar, RoundedCornerShape(8.dp)).padding(6.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-            ) {
-                InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair)
-                StatusIconRow(onPlaceholder)
-            }
-            NeedleMeter(
-                db = meter,
-                transmitting = state?.transmitting == true,
-                tx = tx,
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-            ClockBlock(
-                batteryPercent = state?.battery,
-                onPlaceholder = onPlaceholder,
-                modifier = Modifier.padding(end = 2.dp),
-            )
-        }
-        FreqStrip(state, bands, freqGroup, canOperate, viewModel, onFreqGroup, onPlaceholder)
+    // Two stacked full-width rows (status, then the big frequency) plus a 52 dp PTT bar left
+    // the waterfall a few dozen pixels tall. One header and one control row give that height
+    // back. The scope is the only weighted child, and three quarters of it is waterfall.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        LandscapeHeader(
+            state, meter, tx, bands, freqGroup, canOperate, audio, viewModel,
+            onFreqGroup, onPlaceholder, onPair,
+        )
         SpectrumStack(
             frame = frame,
             state = state,
@@ -305,11 +289,141 @@ private fun LandscapeOperating(
             onZoom = { narrower ->
                 if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
             },
+            waterfallShare = 0.73f,
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
-        GroupStrip(page.group, onGroup)
-        SoftkeyBar(page, state, onKey, Modifier.fillMaxWidth())
+        LandscapeDeck(
+            viewModel, page, state, mayKey, canOperate, keyed, micRefused, onMicRefused, note, onKey, onGroup,
+        )
+    }
+}
+
+@Composable
+private fun LandscapeHeader(
+    state: RadioState?,
+    meter: Double,
+    tx: radio.kd0cq.x6100.net.TxMeters,
+    bands: List<Band>,
+    freqGroup: FreqGroup,
+    canOperate: Boolean,
+    audio: Boolean,
+    viewModel: RadioViewModel,
+    onFreqGroup: (FreqGroup) -> Unit,
+    onPlaceholder: (String) -> Unit,
+    onPair: () -> Unit,
+) {
+    val freq = state?.freqHz ?: 0
+    Row(
+        Modifier.fillMaxWidth().height(52.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
+                StatusIconRow(onPlaceholder)
+                val battery = state?.battery
+                Text(
+                    if (battery == null) "—%" else "$battery%",
+                    color = RfGuru.goldText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+                Text(
+                    "--:--",
+                    color = RfGuru.mute,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier.clickable { onPlaceholder("Clock") },
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Pill(RadioFace.bandLabel(freq, bands), on = state != null)
+                FrequencyReadout(
+                    freqHz = freq,
+                    group = freqGroup,
+                    onGroup = onFreqGroup,
+                    onBump = { dir ->
+                        if (canOperate) viewModel.setFrequency(RadioFace.bumpFrequency(freq, freqGroup, dir))
+                    },
+                    large = false,
+                    textSize = 20.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    state?.let { RadioFace.modeLabel(it.mode) } ?: "—",
+                    color = RfGuru.gold,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+                FlagPills(state, canOperate, viewModel, onPlaceholder)
+            }
+        }
+        NeedleMeter(
+            db = meter,
+            transmitting = state?.transmitting == true,
+            tx = tx,
+            modifier = Modifier.width(118.dp).fillMaxHeight(),
+        )
+    }
+}
+
+@Composable
+private fun LandscapeDeck(
+    viewModel: RadioViewModel,
+    page: radio.kd0cq.x6100.ui.face.FacePage,
+    state: RadioState?,
+    mayKey: Boolean,
+    canOperate: Boolean,
+    keyed: Boolean,
+    micRefused: Boolean,
+    onMicRefused: (Boolean) -> Unit,
+    note: String?,
+    onKey: (FaceKey, Int) -> Unit,
+    onGroup: (FaceGroup) -> Unit,
+) {
+    // Same permission rule as the portrait TransmitRow: a refused microphone leaves the
+    // radio's own mic selected, and the switch itself stays on canOperate, not on mayKey.
+    val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        onMicRefused(!granted)
+        if (granted) viewModel.transmitAudioFromPhone = true
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(44.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            GroupStrip(page.group, onGroup, Modifier.weight(0.9f))
+            SoftkeyBar(page, state, onKey, Modifier.weight(1.2f), barHeight = 40.dp)
+            HoldToTalk(
+                keyed = keyed,
+                mayKey = mayKey,
+                onPress = { viewModel.pressPtt() },
+                onRelease = { viewModel.releasePtt() },
+                modifier = Modifier.width(120.dp).height(40.dp),
+            )
+            MicSwitch(
+                checked = viewModel.transmitAudioFromPhone,
+                enabled = canOperate && !keyed,
+                onChecked = { want ->
+                    if (want && !viewModel.hasMicrophonePermission()) {
+                        askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        viewModel.transmitAudioFromPhone = want
+                    }
+                },
+            )
+        }
+        if (micRefused) {
+            Text(
+                "No microphone permission. The key still uses the microphone at the radio.",
+                color = RfGuru.red,
+                fontSize = 11.sp,
+            )
+        }
+        note?.let { Text(it, color = RfGuru.red, fontSize = 11.sp) }
     }
 }
 

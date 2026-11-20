@@ -285,18 +285,22 @@ fun FrequencyReadout(
     onBump: (Int) -> Unit,
     large: Boolean,
     modifier: Modifier = Modifier,
+    textSize: androidx.compose.ui.unit.TextUnit? = null,
 ) {
     val parts = RadioFace.frequencyParts(freqHz)
-    val size = if (large) 32.sp else 26.sp
+    val size = textSize ?: if (large) 32.sp else 26.sp
+    // The landscape header passes an explicit size. The +/− pair has to shrink with it or the
+    // header grows a second row and the waterfall loses the height that row would have taken.
+    val bump = if (textSize != null) 12.sp else 14.sp
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         FreqPart(parts.first, group == FreqGroup.MHZ, size) { onGroup(FreqGroup.MHZ) }
         Text(".", color = RfGuru.gold, fontSize = size, fontFamily = Mono)
         FreqPart(parts.second, group == FreqGroup.KHZ, size) { onGroup(FreqGroup.KHZ) }
         Text(".", color = RfGuru.gold, fontSize = size, fontFamily = Mono)
         FreqPart(parts.third, group == FreqGroup.HZ, size) { onGroup(FreqGroup.HZ) }
-        Column(Modifier.padding(start = 6.dp)) {
-            Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = 14.sp, modifier = Modifier.clickable { onBump(1) })
-            Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = 14.sp, modifier = Modifier.clickable { onBump(-1) })
+        Column(Modifier.padding(start = 4.dp)) {
+            Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(1) })
+            Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(-1) })
         }
     }
 }
@@ -346,6 +350,7 @@ fun SpectrumStack(
     onTuneHz: (Int) -> Unit,
     onKnob: (Int) -> Unit,
     onZoom: (narrower: Boolean) -> Unit,
+    waterfallShare: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val history = remember { SpectrumHistory(48) }
@@ -410,10 +415,13 @@ fun SpectrumStack(
         ) {
             val scaleH = 16.dp.toPx()
             val planH = 14.dp.toPx()
-            val body = (size.height - scaleH - planH).coerceAtLeast(0f)
-            val specH = body * 0.40f
+            // Zoom sits in the top-right of the trace. The split keeps that band at least as
+            // tall as the chip, so "Zoom x1" cannot land on the last frequency tick.
+            val zoomGuard = 24.dp.toPx()
+            val split = RadioFace.scopeSplit(size.height, scaleH, planH, waterfallShare, zoomGuard)
+            val specH = split.spectrumPx
             val waterTop = specH + scaleH + planH
-            val waterH = (size.height - waterTop).coerceAtLeast(0f)
+            val waterH = split.waterfallPx
 
             if (frame == null || frame.bins <= 0) {
                 drawLine(RfGuru.dim, Offset(0f, specH / 2f), Offset(size.width, specH / 2f), strokeWidth = 1f)
@@ -454,10 +462,13 @@ fun SpectrumStack(
                 val ticks = RadioFace.scaleTicks(hzSpan, maxLabels)
                 val measured = ticks.map { measurer.measure(RadioFace.scaleLabel(it), labelStyle) }
                 val centers = ticks.map { RadioFace.fractionForHz(it, hzSpan).coerceIn(0f, 1f) * size.width }
+                // If the box is too short to put the scale under the chip, keep the last
+                // label out of the chip's corner instead of drawing 14.150 through "Zoom x1".
+                val labelWidth = if (specH + 2f < zoomGuard) (size.width - 72.dp.toPx()).coerceAtLeast(1f) else size.width
                 val lefts = RadioFace.placeScaleLabels(
                     centers,
                     measured.map { it.size.width.toFloat() },
-                    size.width,
+                    labelWidth,
                     8f,
                 )
                 ticks.indices.forEach { i ->
@@ -520,7 +531,7 @@ fun SpectrumStack(
             fontFamily = Mono,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(4.dp)
+                .padding(top = 2.dp, end = 4.dp)
                 .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
                 .pointerInput(Unit) {
                     detectTapGestures(
@@ -562,8 +573,10 @@ fun SoftkeyBar(
     state: RadioState?,
     onKey: (FaceKey, Int) -> Unit,
     modifier: Modifier = Modifier,
+    barHeight: androidx.compose.ui.unit.Dp = 58.dp,
 ) {
-    Row(modifier.height(58.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    val pad = if (barHeight < 48.dp) 1.dp else 4.dp
+    Row(modifier.height(barHeight), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for (slot in 0 until 5) {
             val key = page.keys.getOrNull(slot)
             Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -601,7 +614,7 @@ fun SoftkeyBar(
                             },
                     ) {
                         Column(
-                            Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp),
+                            Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = pad),
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
