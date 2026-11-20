@@ -4,7 +4,12 @@
      SPDX-License-Identifier: GPL-3.0-or-later
      Written by Revolta via OpenCode. -->
 <resources>
+    <!-- Window chrome matches RF.Guru even before Compose draws. Light status icons, dark bars. -->
     <style name="Theme.OpenX6X00" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:statusBarColor">#FF08090C</item>
+        <item name="android:navigationBarColor">#FF08090C</item>
+        <item name="android:windowBackground">#FF08090C</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

@@ -1,0 +1,680 @@
+// OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
+// Copyright (C) 2026 KD0CQ (theMadCatter)
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The operating screen. Landscape follows the radio's 800×480 main page: status, frequency,
+// spectrum, scale, waterfall, F1–F5. Portrait follows the walkie and the phone web panel:
+// a side rail, a large frequency, the same spectrum stack, three sliders, and the key.
+//
+// Every `set` the Panel protocol already accepts is reachable from here. A control the
+// protocol does not carry is still on its firmware page, and tapping it says so instead of
+// inventing a wire command.
+
+package radio.kd0cq.x6100.ui.screens
+
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import radio.kd0cq.x6100.net.Band
+import radio.kd0cq.x6100.net.PanelCommands
+import radio.kd0cq.x6100.net.PanelMode
+import radio.kd0cq.x6100.net.PanelSettings
+import radio.kd0cq.x6100.net.RadioState
+import radio.kd0cq.x6100.ui.RadioViewModel
+import radio.kd0cq.x6100.ui.face.CompactSlider
+import radio.kd0cq.x6100.ui.face.FaceCommand
+import radio.kd0cq.x6100.ui.face.FaceGroup
+import radio.kd0cq.x6100.ui.face.FaceKey
+import radio.kd0cq.x6100.ui.face.FreqGroup
+import radio.kd0cq.x6100.ui.face.FrequencyReadout
+import radio.kd0cq.x6100.ui.face.GroupStrip
+import radio.kd0cq.x6100.ui.face.HoldToTalk
+import radio.kd0cq.x6100.ui.face.MicSwitch
+import radio.kd0cq.x6100.ui.face.NeedleMeter
+import radio.kd0cq.x6100.ui.face.PENDING_FIRMWARE
+import radio.kd0cq.x6100.ui.face.Pill
+import radio.kd0cq.x6100.ui.face.RadioFace
+import radio.kd0cq.x6100.ui.face.SoftkeyBar
+import radio.kd0cq.x6100.ui.face.SpectrumStack
+import radio.kd0cq.x6100.ui.face.StatusIconRow
+import radio.kd0cq.x6100.ui.face.ClockBlock
+import radio.kd0cq.x6100.ui.theme.RfGuru
+
+@Composable
+fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
+    val state by viewModel.state.collectAsState()
+    val meter by viewModel.meter.collectAsState()
+    val tx by viewModel.txMeters.collectAsState()
+    val bands by viewModel.bands.collectAsState()
+    val plan by viewModel.plan.collectAsState()
+    val spots by viewModel.spots.collectAsState()
+    val frame by viewModel.spectrum.collectAsState()
+    val cw by viewModel.cwLines.collectAsState()
+    val role by viewModel.role.collectAsState()
+    val control by viewModel.control.collectAsState()
+    val keyed by viewModel.pttKeyed.collectAsState()
+    val refusal by viewModel.pttRefusal.collectAsState()
+    val audioProblem by viewModel.audioProblem.collectAsState()
+    val volumeMax by viewModel.volumeMax.collectAsState()
+    val modeCount by viewModel.modes.collectAsState()
+    val audio by viewModel.audioRunning.collectAsState()
+
+    var pageIndex by rememberSaveable { mutableIntStateOf(0) }
+    var freqGroupOrdinal by rememberSaveable { mutableIntStateOf(FreqGroup.KHZ.ordinal) }
+    val freqGroup = FreqGroup.entries[freqGroupOrdinal.coerceIn(0, FreqGroup.entries.lastIndex)]
+    var pending by remember { mutableStateOf<String?>(null) }
+    var pickingModes by remember { mutableStateOf(false) }
+    var pickingBands by remember { mutableStateOf(false) }
+    var micRefused by remember { mutableStateOf(false) }
+
+    val canOperate = role.canOperate
+    val mayKey = canOperate && role.txAllowed
+    val page = RadioFace.page(pageIndex)
+    val radio = state
+
+    fun sendIfAllowed(block: () -> Unit) {
+        if (canOperate) block()
+    }
+
+    fun onKey(key: FaceKey, direction: Int) {
+        when (val command = RadioFace.commandFor(key, radio, volumeMax, direction)) {
+            FaceCommand.NextPage -> pageIndex = RadioFace.nextPageIndex(pageIndex)
+            FaceCommand.PreviousPage -> pageIndex = RadioFace.previousPageIndex(pageIndex)
+            is FaceCommand.SetInt -> sendIfAllowed { viewModel.send(PanelCommands.set(command.setting, command.value)) }
+            is FaceCommand.SetFilter -> sendIfAllowed { viewModel.setFilter(command.lowHz, command.highHz) }
+            FaceCommand.PickMode -> pickingModes = true
+            FaceCommand.PickBand -> pickingBands = true
+            is FaceCommand.Navigate -> onNavigate(command.route)
+            is FaceCommand.Pending -> pending = command.feature
+        }
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize().background(RfGuru.bg)) {
+        val landscape = maxWidth > maxHeight
+        Column(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
+            if (landscape) {
+                LandscapeOperating(
+                    modifier = Modifier.weight(1f),
+                    viewModel = viewModel,
+                    state = radio,
+                    meter = meter,
+                    tx = tx,
+                    bands = bands,
+                    plan = plan,
+                    spots = spots,
+                    frame = frame,
+                    cw = cw.lastOrNull(),
+                    canOperate = canOperate,
+                    controlMine = control.mine,
+                    controlFree = control.free,
+                    controlTci = control.isTci,
+                    keyed = keyed,
+                    audio = audio,
+                    freqGroup = freqGroup,
+                    page = page,
+                    onFreqGroup = { freqGroupOrdinal = it.ordinal },
+                    onKey = ::onKey,
+                    onGroup = { pageIndex = RadioFace.groupStartIndex(it) },
+                    onPlaceholder = { pending = it },
+                    onPair = { onNavigate("pairing") },
+                )
+            } else {
+                PortraitOperating(
+                    modifier = Modifier.weight(1f),
+                    viewModel = viewModel,
+                    state = radio,
+                    meter = meter,
+                    tx = tx,
+                    bands = bands,
+                    plan = plan,
+                    spots = spots,
+                    frame = frame,
+                    cw = cw.lastOrNull(),
+                    canOperate = canOperate,
+                    volumeMax = volumeMax,
+                    controlMine = control.mine,
+                    controlFree = control.free,
+                    controlTci = control.isTci,
+                    keyed = keyed,
+                    audio = audio,
+                    freqGroup = freqGroup,
+                    page = page,
+                    onFreqGroup = { freqGroupOrdinal = it.ordinal },
+                    onKey = ::onKey,
+                    onGroup = { pageIndex = RadioFace.groupStartIndex(it) },
+                    onPlaceholder = { pending = it },
+                    onPair = { onNavigate("pairing") },
+                )
+            }
+            TransmitRow(
+                viewModel = viewModel,
+                mayKey = mayKey,
+                canOperate = canOperate,
+                keyed = keyed,
+                micRefused = micRefused,
+                onMicRefused = { micRefused = it },
+                note = refusal ?: audioProblem,
+            )
+        }
+    }
+
+    pending?.let { feature ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            containerColor = RfGuru.bar,
+            titleContentColor = RfGuru.gold,
+            textContentColor = RfGuru.text,
+            title = { Text(feature) },
+            text = { Text(PENDING_FIRMWARE) },
+            confirmButton = {
+                TextButton(onClick = { pending = null }) { Text("Close", color = RfGuru.gold) }
+            },
+        )
+    }
+    if (pickingModes) {
+        ModeDialog(
+            modeCount = modeCount,
+            current = radio?.mode,
+            canOperate = canOperate,
+            onMode = { index ->
+                sendIfAllowed { viewModel.setMode(index) }
+                pickingModes = false
+            },
+            onFt8 = {
+                pickingModes = false
+                onNavigate("ft8")
+            },
+            onPending = { pending = it },
+            onDismiss = { pickingModes = false },
+        )
+    }
+    if (pickingBands) {
+        BandDialog(
+            bands = bands,
+            canOperate = canOperate,
+            onTune = { hz ->
+                sendIfAllowed { viewModel.setFrequency(hz) }
+                pickingBands = false
+            },
+            onDismiss = { pickingBands = false },
+        )
+    }
+}
+
+@Composable
+private fun LandscapeOperating(
+    modifier: Modifier,
+    viewModel: RadioViewModel,
+    state: RadioState?,
+    meter: Double,
+    tx: radio.kd0cq.x6100.net.TxMeters,
+    bands: List<Band>,
+    plan: List<radio.kd0cq.x6100.net.PlanSegment>,
+    spots: List<radio.kd0cq.x6100.net.Spot>,
+    frame: radio.kd0cq.x6100.net.SpectrumFrame?,
+    cw: String?,
+    canOperate: Boolean,
+    controlMine: Boolean,
+    controlFree: Boolean,
+    controlTci: Boolean,
+    keyed: Boolean,
+    audio: Boolean,
+    freqGroup: FreqGroup,
+    page: radio.kd0cq.x6100.ui.face.FacePage,
+    onFreqGroup: (FreqGroup) -> Unit,
+    onKey: (FaceKey, Int) -> Unit,
+    onGroup: (FaceGroup) -> Unit,
+    onPlaceholder: (String) -> Unit,
+    onPair: () -> Unit,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth().height(78.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                Modifier.weight(1.1f).fillMaxHeight().background(RfGuru.bar, RoundedCornerShape(8.dp)).padding(6.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair)
+                StatusIconRow(onPlaceholder)
+            }
+            NeedleMeter(
+                db = meter,
+                transmitting = state?.transmitting == true,
+                tx = tx,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+            ClockBlock(
+                batteryPercent = state?.battery,
+                onPlaceholder = onPlaceholder,
+                modifier = Modifier.padding(end = 2.dp),
+            )
+        }
+        FreqStrip(state, bands, freqGroup, canOperate, viewModel, onFreqGroup, onPlaceholder)
+        SpectrumStack(
+            frame = frame,
+            state = state,
+            plan = plan,
+            spots = spots,
+            cwLine = cw,
+            canOperate = canOperate,
+            onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
+            onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
+            onZoom = { narrower ->
+                if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
+            },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+        )
+        ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
+        GroupStrip(page.group, onGroup)
+        SoftkeyBar(page, state, onKey, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun PortraitOperating(
+    modifier: Modifier,
+    viewModel: RadioViewModel,
+    state: RadioState?,
+    meter: Double,
+    tx: radio.kd0cq.x6100.net.TxMeters,
+    bands: List<Band>,
+    plan: List<radio.kd0cq.x6100.net.PlanSegment>,
+    spots: List<radio.kd0cq.x6100.net.Spot>,
+    frame: radio.kd0cq.x6100.net.SpectrumFrame?,
+    cw: String?,
+    canOperate: Boolean,
+    volumeMax: Int,
+    controlMine: Boolean,
+    controlFree: Boolean,
+    controlTci: Boolean,
+    keyed: Boolean,
+    audio: Boolean,
+    freqGroup: FreqGroup,
+    page: radio.kd0cq.x6100.ui.face.FacePage,
+    onFreqGroup: (FreqGroup) -> Unit,
+    onKey: (FaceKey, Int) -> Unit,
+    onGroup: (FaceGroup) -> Unit,
+    onPlaceholder: (String) -> Unit,
+    onPair: () -> Unit,
+) {
+    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
+            ClockBlock(state?.battery, onPlaceholder)
+        }
+        StatusIconRow(onPlaceholder)
+        Row(Modifier.fillMaxWidth().height(300.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PortraitRail(state, page, canOperate, viewModel, onPage = {
+                val pageKey = page.keys.firstOrNull { it.action is radio.kd0cq.x6100.ui.face.FaceAction.NextPage }
+                if (pageKey != null) onKey(pageKey, +1) else onGroup(page.group)
+            })
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                FreqStrip(state, bands, freqGroup, canOperate, viewModel, onFreqGroup, onPlaceholder, large = false)
+                SpectrumStack(
+                    frame = frame,
+                    state = state,
+                    plan = plan,
+                    spots = spots,
+                    cwLine = cw,
+                    canOperate = canOperate,
+                    onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
+                    onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
+                    onZoom = { narrower ->
+                        if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
+                    },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                )
+            }
+        }
+        // The rail's page key is the walkie's page button. The softkeys below are the radio's F1–F5.
+        RailButton(RadioFace.stepLabel(state?.stepIndex ?: 0)) {
+            if (canOperate) viewModel.setStep(RadioFace.nextStepIndex(state?.stepIndex ?: 0))
+        }
+        NeedleMeter(meter, state?.transmitting == true, tx, Modifier.fillMaxWidth().height(86.dp))
+        val volMax = volumeMax.coerceAtLeast(1).toFloat()
+        CompactSlider("VOL", "${state?.volume ?: 0}", (state?.volume ?: 0).toFloat(), 0f..volMax, canOperate) {
+            viewModel.setVolume(it)
+        }
+        CompactSlider("SQL", "${state?.squelch ?: 0}", (state?.squelch ?: 0).toFloat(), 0f..100f, canOperate) {
+            viewModel.setSquelch(it)
+        }
+        CompactSlider("PWR", RadioFace.formatWatts(state?.powerWatts ?: 0.0), (state?.powerTenths ?: 0).toFloat(), 0f..100f, canOperate) {
+            viewModel.setPower(it)
+        }
+        ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
+        GroupStrip(page.group, onGroup)
+        SoftkeyBar(page, state, onKey, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun PortraitRail(
+    state: RadioState?,
+    page: radio.kd0cq.x6100.ui.face.FacePage,
+    canOperate: Boolean,
+    viewModel: RadioViewModel,
+    onPage: () -> Unit,
+) {
+    Column(
+        Modifier.width(72.dp).fillMaxHeight(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        RailButton(page.badge.replace(' ', '\n')) { onPage() }
+        RailButton(RadioFace.vfoLabel(state?.vfo ?: 0).replace('-', '\n')) {
+            if (canOperate) viewModel.toggleVfo()
+        }
+        RailButton("Band\n+") { if (canOperate) viewModel.setBand(1) }
+        RailButton("Band\n−") { if (canOperate) viewModel.setBand(-1) }
+        Text(
+            RadioFace.formatWatts(state?.powerWatts ?: 0.0),
+            color = RfGuru.goldText,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun RailButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Text(
+        text = text,
+        color = RfGuru.text,
+        fontSize = 11.sp,
+        fontFamily = FontFamily.Monospace,
+        lineHeight = 13.sp,
+        modifier = modifier
+            .fillMaxWidth()
+            .background(RfGuru.button, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun InfoPills(
+    state: RadioState?,
+    canOperate: Boolean,
+    audio: Boolean,
+    viewModel: RadioViewModel,
+    onPlaceholder: (String) -> Unit,
+    onPair: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val modeCount by viewModel.modes.collectAsState()
+    Row(
+        modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Pill(
+            if (state == null) "VFO" else RadioFace.vfoLabel(state.vfo),
+            on = true,
+            onClick = { if (canOperate) viewModel.toggleVfo() },
+        )
+        Pill(
+            state?.let { RadioFace.modeLabel(it.mode) } ?: "—",
+            on = true,
+            onClick = { if (canOperate && state != null) viewModel.setMode(RadioFace.nextMode(state.mode, modeCount)) },
+        )
+        Pill(
+            state?.let { RadioFace.agcLabel(it.agc) } ?: "AGC",
+            on = state != null,
+            onClick = { if (canOperate) viewModel.setAgc(RadioFace.nextAgc(state?.agc ?: 0)) },
+        )
+        Pill("PRE", on = state?.preOn == true, onClick = { if (canOperate) viewModel.toggle(PanelSettings.PRE, state?.preOn != true) })
+        Pill("ATT", on = state?.attenuatorOn == true, onClick = { if (canOperate) viewModel.toggle(PanelSettings.ATT, state?.attenuatorOn != true) })
+        Pill("ATU", on = state?.atuOn == true, onClick = { if (canOperate) viewModel.toggle(PanelSettings.ATU, state?.atuOn != true) })
+        Pill("SPL", on = false, placeholder = true, onClick = { onPlaceholder("Split / TX shift") })
+        if (!canOperate) {
+            Pill("Pair", on = true, onClick = onPair)
+        }
+        if (audio) {
+            Text("RX", color = RfGuru.ok, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        }
+    }
+}
+
+@Composable
+private fun FreqStrip(
+    state: RadioState?,
+    bands: List<Band>,
+    freqGroup: FreqGroup,
+    canOperate: Boolean,
+    viewModel: RadioViewModel,
+    onFreqGroup: (FreqGroup) -> Unit,
+    onPlaceholder: (String) -> Unit,
+    large: Boolean = true,
+) {
+    val freq = state?.freqHz ?: 0
+    val shape = RoundedCornerShape(8.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(RfGuru.bar, shape)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Pill(RadioFace.bandLabel(freq, bands), on = state != null)
+            FrequencyReadout(
+                freqHz = freq,
+                group = freqGroup,
+                onGroup = onFreqGroup,
+                onBump = { dir ->
+                    if (canOperate) viewModel.setFrequency(RadioFace.bumpFrequency(freq, freqGroup, dir))
+                },
+                large = large,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                state?.let { RadioFace.modeLabel(it.mode) } ?: "—",
+                color = RfGuru.gold,
+                fontFamily = FontFamily.Monospace,
+                fontSize = if (large) 16.sp else 13.sp,
+            )
+            if (large) FlagPills(state, canOperate, viewModel, onPlaceholder)
+        }
+        if (!large) FlagPills(state, canOperate, viewModel, onPlaceholder)
+    }
+}
+
+@Composable
+private fun FlagPills(
+    state: RadioState?,
+    canOperate: Boolean,
+    viewModel: RadioViewModel,
+    onPlaceholder: (String) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Pill("NR", on = state?.noiseReduceOn == true, onClick = {
+            if (canOperate) viewModel.toggle(PanelSettings.NR, state?.noiseReduceOn != true)
+        })
+        Pill("NB", on = state?.noiseBlankerOn == true, onClick = {
+            if (canOperate) viewModel.toggle(PanelSettings.NB, state?.noiseBlankerOn != true)
+        })
+        Pill("DNF", on = false, placeholder = true, onClick = { onPlaceholder("DNF") })
+        Pill(
+            "LOCK",
+            on = state?.freqLocked == true,
+            onClick = { if (canOperate) viewModel.toggle(PanelSettings.LOCK, state?.freqLocked != true) },
+        )
+        Text(
+            RadioFace.stepLabel(state?.stepIndex ?: 0),
+            color = RfGuru.dim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.clickable {
+                if (canOperate) viewModel.setStep(RadioFace.nextStepIndex(state?.stepIndex ?: 0))
+            },
+        )
+    }
+}
+
+@Composable
+private fun ControlHint(
+    free: Boolean,
+    mine: Boolean,
+    tci: Boolean,
+    keyed: Boolean,
+    transmitting: Boolean,
+    canOperate: Boolean,
+    viewModel: RadioViewModel,
+) {
+    // Taking or dropping control while the carrier is up is how a second client unkeys someone.
+    // The button stays hidden until the key is up. `ctl tci` is this phone's own microphone path.
+    if (keyed || transmitting) return
+    if (!free && !mine && !tci) {
+        TextButton(onClick = { viewModel.takeControl() }, enabled = canOperate) {
+            Text("Take control", color = RfGuru.gold)
+        }
+    } else if (mine) {
+        TextButton(onClick = { viewModel.releaseControl() }) {
+            Text("Give control back", color = RfGuru.dim)
+        }
+    }
+}
+
+@Composable
+private fun TransmitRow(
+    viewModel: RadioViewModel,
+    mayKey: Boolean,
+    canOperate: Boolean,
+    keyed: Boolean,
+    micRefused: Boolean,
+    onMicRefused: (Boolean) -> Unit,
+    note: String?,
+) {
+    val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        onMicRefused(!granted)
+        if (granted) viewModel.transmitAudioFromPhone = true
+    }
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HoldToTalk(
+                keyed = keyed,
+                mayKey = mayKey,
+                onPress = { viewModel.pressPtt() },
+                onRelease = { viewModel.releasePtt() },
+                modifier = Modifier.weight(1f).height(64.dp),
+            )
+            MicSwitch(
+                checked = viewModel.transmitAudioFromPhone,
+                enabled = canOperate && !keyed,
+                onChecked = { want ->
+                    if (want && !viewModel.hasMicrophonePermission()) {
+                        askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        viewModel.transmitAudioFromPhone = want
+                    }
+                },
+            )
+        }
+        if (micRefused) {
+            Text(
+                "No microphone permission. The key still uses the microphone at the radio.",
+                color = RfGuru.red,
+                fontSize = 11.sp,
+            )
+        }
+        note?.let { Text(it, color = RfGuru.red, fontSize = 11.sp) }
+    }
+}
+
+@Composable
+private fun ModeDialog(
+    modeCount: Int,
+    current: Int?,
+    canOperate: Boolean,
+    onMode: (Int) -> Unit,
+    onFt8: () -> Unit,
+    onPending: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = RfGuru.bar,
+        titleContentColor = RfGuru.gold,
+        textContentColor = RfGuru.text,
+        title = { Text("Modes") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                PanelMode.entries.take(modeCount.coerceAtLeast(1)).forEach { mode ->
+                    TextButton(onClick = { onMode(mode.index) }, enabled = canOperate) {
+                        Text(
+                            if (current == mode.index) "${mode.label}  ●" else mode.label,
+                            color = if (current == mode.index) RfGuru.gold else RfGuru.text,
+                        )
+                    }
+                }
+                TextButton(onClick = onFt8) { Text("FT8 decoder", color = RfGuru.goldText) }
+                Text("Not on the Panel link yet", color = RfGuru.mute, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                RadioFace.pendingDigitalModes.forEach { name ->
+                    TextButton(onClick = { onPending(name) }) { Text(name, color = RfGuru.mute) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close", color = RfGuru.gold) } },
+    )
+}
+
+@Composable
+private fun BandDialog(
+    bands: List<Band>,
+    canOperate: Boolean,
+    onTune: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = RfGuru.bar,
+        titleContentColor = RfGuru.gold,
+        textContentColor = RfGuru.text,
+        title = { Text("Bands") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (bands.isEmpty()) {
+                    Text("The radio has not sent a band list yet.", color = RfGuru.dim)
+                }
+                bands.forEach { band ->
+                    val middle = ((band.startHz.toLong() + band.stopHz.toLong()) / 2L).toInt()
+                    TextButton(onClick = { onTune(middle) }, enabled = canOperate) {
+                        Text("${band.name}  ${RadioFace.formatFrequency(middle)}", color = RfGuru.text)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close", color = RfGuru.gold) } },
+    )
+}

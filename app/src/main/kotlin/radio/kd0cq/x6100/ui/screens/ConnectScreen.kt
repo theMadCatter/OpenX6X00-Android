@@ -52,7 +52,7 @@ fun ConnectScreen(viewModel: RadioViewModel, onPaired: () -> Unit) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Radio", style = MaterialTheme.typography.headlineSmall)
+        Text("Radio", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         Text("The radio advertises itself as x6100.local; its panel server answers on 50002.",
             style = MaterialTheme.typography.bodyMedium)
         PhaseLine(phase, endpoint?.host, viewModel.paired)

@@ -41,7 +41,7 @@ Cause, not a second watchdog: any exit from a live hold attempts the up-command 
 - `reset()` unkeys when the session was live **or** an up-command is still owed. Previously Releasing after a lost renewal made `reset()` send nothing.
 - TCI `letGo` / `reset` send the unkey **before** `mic.stop()`. `stop()` joins the capture thread for up to 500 ms, which is the whole of `TX_SILENCE_MS`.
 - `LeasePttController`: panel phase loss fail-safes both paths when `onAir` or either machine `owesUnkey`. TCI phase loss calls `tx.linkLost` when keyed or owing. `tx 0` stops TCI only in `State.Keyed`. Control loss unkeys TCI unless `ControlInfo.isTci`. Role loss fail-safes both when `!canOperate` or `!txAllowed`. `RadioRig`'s TCI-phase watcher uses `onAir || needsUnkey`.
-- `ControlsScreen`: `mayKey = canOperate && txAllowed` gates `Button.enabled` and `pointerInput`. The microphone switch stays on `canOperate` only.
+- `ControlsScreen` (later replaced; the same gate is now `HoldToTalk` on the radio screen — see the RF.Guru section): `mayKey = canOperate && txAllowed` gates `Button.enabled` and `pointerInput`. The microphone switch stays on `canOperate` only.
 
 Why this does not re-key or unkey the wrong press: the generation check and the lock around "unkey owed, then down-command" are the same mechanism the branch already used to stop a renewal after release. Retries are bounded so a dead socket is not written forever. Firmware socket-close and the 3 s / 500 ms / 180 s limits remain the backstop when every write fails.
 
@@ -105,3 +105,44 @@ Change:
 - `textQueued`, `textHighWater`, and `textRejected` are atomics. Nothing is logged per frame.
 
 Tests: a flood of spectrum and screen frames (well past 512) does not drop `ctl`, `tx 0`, `role`, `err`, or the text lines posted among the frames; the picture lane still holds only the latest frame; lines posted before any collector starts are kept; a retired socket's `tx` is not delivered on the next connection. `PanelCommands.reconnect` is `auth` (when a token exists) and `panel 1`.
+
+## RF.Guru radio face (cursor/rfguru-radio-ui-96d1)
+
+The operating UI was a waterfall page plus a controls page, with five letter tabs (W C F S L) and a theme that followed the phone's light/dark setting. The radio's own screen (theme.h RF.Guru column, button_bar.cpp F1–F5, the 800×480 main page, the walkie portrait, and the phone web panel) is one dark face. That is what this change draws.
+
+What changed, and why:
+
+- `RadioFace` is plain Kotlin (no Android). Frequency text, S-meter and TX-meter fractions, band label, band-plan colours, waterfall colour, spot hit-testing, filter nudge, softkey pages, and the "pending" catalog live there so unit tests can run on the JVM. The composables only paint what it returns.
+- One radio screen replaces `WaterfallScreen` and `ControlsScreen`. Landscape is the 800×480 stack (status, frequency, spectrum, scale, scrolling waterfall, F1–F5). Portrait is the walkie rail plus the phone panel's sliders. PTT stays on screen in both. There is still one key path.
+- `HoldToTalk` keeps the old gate: `mayKey = canOperate && txAllowed`, press and release in `finally`, and the release always calls `releasePtt`. The microphone switch is still `canOperate` only, and a refused `RECORD_AUDIO` leaves the radio microphone selected. `RadioViewModel.pressKey` still refuses a bare `key PTT`. The Screen tab's key list also drops `PTT` and `POWER`.
+- Spectrum history is the last 48 frames, newest first. Every cluster spot in the span is drawn and tappable. A tap on the trace tunes `set freq` (the spot, when one is within slop). A swipe sends `knob main`, so the radio's own step moves the VFO.
+- Softkey groups follow button_bar.cpp: GEN (VOL 1:2, VOL 2:2, MFK 1:3–3:3), APP 1:3–3:3, KEY 1:2–2:2 plus CW 1:2–2:2, DFN 1:3–3:3, DFL (one page, no page key), MEM 1:2–2:2. Tap steps forward in the group, hold steps back.
+- Theme is forced: `#08090c` background, `#13161d` bars, `#262b36` borders, `#1b1f29` buttons, `#e5a823` / `#f2d886` gold, `#4f8bf5` markers, `#ff2020` VFO line. `OpenX6X00Theme` ignores the system dark flag. Connect, Pairing, FT8, Spots, Log, and Settings use the same colours. Tabs are stroke icons (Radio, Screen, FT8, Spots, Log) plus Pair, Setup, and Connect off the operating row.
+- `Screen` asks for `screen 1` while it is composed and stops on dispose. Optional keys sit on the picture; knobs are main / vol / mfk.
+
+Placeholders (dialog text `Pending firmware Panel support`, and the same list on Settings). These are firmware menus the Panel protocol does not carry. They are on the softkey pages and the status icons, not as a wall of text on the frequency strip:
+
+- VFO: Split / TX shift
+- Status icons and clock: clock, remaining time, Wi-Fi, Bluetooth, A2DP, CAT, GPS, DX cluster link
+- DSP: DNF (and DNF freq / width / auto), NB level and width, NR level
+- VFO shift and audio: RIT, XIT, COMP, IF shift, VOX, Monitor
+- CW: keyer speed, volume, tone, mode, iambic, QSK, ratio, ZAP, CW peak, peak Q, trainer, decoder switch, tuner, decoder SNR, parse, CW keyboard
+- Tools: SWR Scan, RX Recorder, Field Ops, GPS, Birdie Cal, Memories (sets 1–8), waterfall reference and mode, screen recorder
+- Modes with no `set`: JS8, PSK, RTTY, Olivia, SSTV, WSPR, Navtex, WeFax. FT8 still opens the existing FT8 screen.
+
+Wired `set` names, all reachable: freq, mode, agc, pre, att, nb, nr, sql, rfg, vol, pwr, step, zoom, band, vfo, filter, atu, lock. Plus `knob` and non-carrier `key`.
+
+## What I found while compiling
+
+- Kotlin will not resolve a package name after a member dot (`Modifier.something.androidx.compose...`). Those calls were rewritten as imports (`padding`, `clickable`, `RoundedCornerShape`, `remember`).
+- `CompactSlider`'s trailing lambda was bound to `modifier` because `onChange` was not the last parameter. `onChange` is last now.
+- `filterNudgeWillNotCrossItself` expected the sample pair `300–2700` when the inputs were `2650–2700`. A +50 Hz low-edge step would land on the high edge, so the pair stays `2650–2700`. The assertion matches that.
+
+## Tests and what was not run
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug` on JDK 21, compileSdk 36:
+
+- `testDebugUnitTest`: **162 tests, 0 failures, 0 errors** (150 existing plus 12 in `RadioFaceTest`).
+- `assembleDebug`: **BUILD SUCCESSFUL**.
+
+No emulator or device is available in this environment, so the Compose layouts were not opened. The crash that a `weight` inside an unbounded scroll would cause was checked in the source: portrait scroll is `Modifier.weight(1f).verticalScroll(...)` on a bounded parent column, and the only inner `weight` calls sit in a fixed-height row or a width-bounded row. That is not a substitute for a device pass.

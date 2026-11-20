@@ -82,6 +82,16 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     val receipts: StateFlow<List<LoggedReceipt>> = link.receipts
     val sessions: StateFlow<List<SessionInfo>> = link.sessions
     val spectrum: StateFlow<SpectrumFrame?> = link.spectrum
+
+    /** The radio's own framebuffer, while [wantScreenFrames] has asked for it. */
+    val screen: StateFlow<radio.kd0cq.x6100.net.ScreenFrame?> = link.screen
+
+    /** Width and height the radio reported for that framebuffer. */
+    val screenSize: StateFlow<radio.kd0cq.x6100.net.ScreenSize?> = link.screenSize
+
+    /** Key names this radio accepts on `key NAME`. PTT is not offered through [pressKey]. */
+    val keyNames: StateFlow<List<String>> = link.keyNames
+
     val modes: StateFlow<Int> = link.modeCount
     val volumeMax: StateFlow<Int> = link.volumeMax
     val hello: StateFlow<Hello?> = link.hello
@@ -182,6 +192,14 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     /** The radio takes tenths of a watt. */
     fun setPower(tenthsOfWatt: Int) = send(PanelCommands.set(PanelSettings.PWR, tenthsOfWatt))
 
+    fun setZoom(value: Int) = send(PanelCommands.set(PanelSettings.ZOOM, value))
+
+    /** +1 is the next band up, −1 the next band down. The radio does not take a band index here. */
+    fun setBand(direction: Int) = send(PanelCommands.set(PanelSettings.BAND, direction))
+
+    /** "set vfo" toggles A and B. The value is ignored by the radio beyond being present; 1 is what the page sends. */
+    fun toggleVfo() = send(PanelCommands.set(PanelSettings.VFO, 1))
+
     fun setRfGain(value: Int) = send(PanelCommands.set(PanelSettings.RFG, value))
 
     fun setSquelch(value: Int) = send(PanelCommands.set(PanelSettings.SQL, value))
@@ -189,8 +207,26 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     fun toggle(setting: String, on: Boolean) =
         send(PanelCommands.set(setting, if (on) 1 else 0))
 
-    /** Turn the main tuning knob by N detents. */
-    fun tuneBy(detents: Int) = send(PanelCommands.knob("main", detents))
+    /** Turn the main tuning knob by N detents. Positive is up in frequency, as the radio's main encoder. */
+    fun tuneBy(detents: Int) = turnKnob("main", detents)
+
+    /**
+     * `knob main|vol|mfk N`. The names are the three encoders remote_server.c accepts.
+     * A name outside that set is still sent: the radio answers `err unknown knob` and nothing moves.
+     */
+    fun turnKnob(name: String, detents: Int) = send(PanelCommands.knob(name, detents))
+
+    /**
+     * A front-panel key, down or up.
+     *
+     * PTT is refused here. The only key path that may key the transmitter is [pressPtt] / [releasePtt],
+     * because that path is the lease (or the TCI session) and it is the path that also sends the unkey.
+     * A bare `key PTT 1` from a screen button would leave the carrier up with no machine watching it.
+     */
+    fun pressKey(name: String, down: Boolean) {
+        if (radio.kd0cq.x6100.ui.face.RadioFace.isCarrierKey(name)) return
+        send(PanelCommands.key(name, down))
+    }
 
     fun takeControl() = send(PanelCommands.control(take = true))
 
@@ -218,8 +254,8 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     /** The FT8 app's switches, one command each. */
     fun ft8(what: String, arg: String? = null) = send(PanelCommands.ft8(what, arg))
 
-    /** Ask the radio to send its own screen, or to stop. */
-    fun wantScreenFrames(on: Boolean) = link.wantScreenFrames(on)
+    /** Ask the radio to send its own screen, or to stop. [picture] picks sharp, balanced or fast JPEG. */
+    fun wantScreenFrames(on: Boolean, picture: PanelCommands.Picture? = null) = link.wantScreenFrames(on, picture)
 
     override fun onCleared() {
         discovery.stop()

@@ -57,7 +57,7 @@ fun LogScreen(viewModel: RadioViewModel) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Log", style = MaterialTheme.typography.headlineSmall)
+        Text("Log", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         Text(
             "role ${role.role.wire}  ·  the radio writes its own day log",
             style = MaterialTheme.typography.bodySmall,
