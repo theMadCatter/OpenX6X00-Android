@@ -78,7 +78,11 @@ import radio.kd0cq.x6100.net.TxMeters
 import radio.kd0cq.x6100.ui.theme.RfGuru
 import radio.kd0cq.x6100.ui.theme.packedArgb
 
-private fun waterfallImage(rows: List<SpectrumSlice>): androidx.compose.ui.graphics.ImageBitmap? {
+private fun waterfallImage(
+    rows: List<SpectrumSlice>,
+    floor: Int,
+    ceiling: Int,
+): androidx.compose.ui.graphics.ImageBitmap? {
     if (rows.isEmpty()) return null
     val bins = rows.first().db.size
     if (bins <= 0) return null
@@ -87,8 +91,8 @@ private fun waterfallImage(rows: List<SpectrumSlice>): androidx.compose.ui.graph
     for (y in rows.indices) {
         val db = rows[y].db
         for (x in 0 until bins) {
-            val sample = if (x < db.size) db[x].toInt() else -128
-            pixels[y * bins + x] = RadioFace.waterfallArgb(sample)
+            val sample = if (x < db.size) db[x].toInt() else floor
+            pixels[y * bins + x] = RadioFace.waterfallArgb(sample, floor, ceiling)
         }
     }
     bmp.setPixels(pixels, 0, bins, 0, 0, bins, rows.size)
@@ -352,9 +356,12 @@ fun SpectrumStack(
         tick++
     }
     val rows = remember(tick) { history.snapshot() }
+    // One window for the whole history. Scaling each row on its own makes the colours pump as
+    // the noise percentile jitters, and a quiet band then looks like a flat navy field.
+    val window = remember(tick) { RadioFace.waterfallWindow(rows.map { it.db }) }
     // Built beside the canvas, not inside draw. drawImage keeps the bitmap until the frame is
     // presented; recycling it in the draw pass blanks the waterfall.
-    val waterfall = remember(tick) { waterfallImage(rows) }
+    val waterfall = remember(tick) { waterfallImage(rows, window.first, window.second) }
     val measurer = rememberTextMeasurer()
     val span = frame?.let { RadioFace.spanOf(it.centreHz, it.widthHz) }
     val labelStyle = TextStyle(color = RfGuru.dim, fontSize = 10.sp, fontFamily = Mono)
@@ -413,10 +420,11 @@ fun SpectrumStack(
             } else {
                 val bins = frame.bins
                 val stepX = size.width / bins
+                val dbSpan = (window.second - window.first).coerceAtLeast(1)
                 val outline = Path()
                 for (i in 0 until bins) {
-                    val db = frame.db.getOrElse(i) { 0 }.toInt()
-                    val v = ((db + 128) / 128f).coerceIn(0f, 1f)
+                    val db = frame.db.getOrElse(i) { window.first.toByte() }.toInt()
+                    val v = ((db - window.first).toFloat() / dbSpan).coerceIn(0f, 1f)
                     val x = i * stepX
                     val y = specH * (1f - v * 0.92f)
                     if (i == 0) outline.moveTo(x, y) else outline.lineTo(x, y)
@@ -439,18 +447,26 @@ fun SpectrumStack(
                 )
             }
 
-            span?.let { window ->
-                val ticks = RadioFace.scaleTicks(window)
-                ticks.forEach { hz ->
-                    val x = RadioFace.fractionForHz(hz, window).coerceIn(0f, 1f) * size.width
+            span?.let { hzSpan ->
+                // Fewer labels than the view can hold. placeScaleLabels then drops any that still
+                // collide, and keeps the survivors inside the width so 14.140 is not cut in half.
+                val maxLabels = (size.width / 78f).toInt().coerceIn(2, 5)
+                val ticks = RadioFace.scaleTicks(hzSpan, maxLabels)
+                val measured = ticks.map { measurer.measure(RadioFace.scaleLabel(it), labelStyle) }
+                val centers = ticks.map { RadioFace.fractionForHz(it, hzSpan).coerceIn(0f, 1f) * size.width }
+                val lefts = RadioFace.placeScaleLabels(
+                    centers,
+                    measured.map { it.size.width.toFloat() },
+                    size.width,
+                    8f,
+                )
+                ticks.indices.forEach { i ->
+                    val x = centers[i]
                     drawLine(RfGuru.mute, Offset(x, specH), Offset(x, specH + scaleH), strokeWidth = 1f)
-                    val label = RadioFace.formatFrequency(hz).removeSuffix(".000").let { trimmed ->
-                        if (trimmed.length > 7) trimmed.take(7) else trimmed
-                    }
-                    val measured = measurer.measure(label, labelStyle)
-                    drawText(measured, topLeft = Offset((x - measured.size.width / 2f).coerceAtLeast(0f), specH + 1f))
+                    val left = lefts[i] ?: return@forEach
+                    drawText(measured[i], topLeft = Offset(left, specH + 1f))
                 }
-                RadioFace.planSlices(window, plan).forEach { slice ->
+                RadioFace.planSlices(hzSpan, plan).forEach { slice ->
                     val left = slice.start * size.width
                     val right = slice.end * size.width
                     drawRect(
@@ -468,8 +484,8 @@ fun SpectrumStack(
                 }
                 state?.let { radio ->
                     val (lo, hi) = RadioFace.passbandHz(radio.freqHz, radio.filterLowHz, radio.filterHighHz)
-                    val x0 = RadioFace.fractionForHz(lo, window) * size.width
-                    val x1 = RadioFace.fractionForHz(hi, window) * size.width
+                    val x0 = RadioFace.fractionForHz(lo, hzSpan) * size.width
+                    val x1 = RadioFace.fractionForHz(hi, hzSpan) * size.width
                     val bandLeft = minOf(x0, x1).coerceIn(0f, size.width)
                     val bandRight = maxOf(x0, x1).coerceIn(0f, size.width)
                     drawRect(
@@ -477,11 +493,11 @@ fun SpectrumStack(
                         topLeft = Offset(bandLeft, 0f),
                         size = Size((bandRight - bandLeft).coerceAtLeast(1f), size.height),
                     )
-                    val vfoX = RadioFace.fractionForHz(radio.freqHz, window).coerceIn(0f, 1f) * size.width
+                    val vfoX = RadioFace.fractionForHz(radio.freqHz, hzSpan).coerceIn(0f, 1f) * size.width
                     drawLine(packedArgb(RadioFace.VFO_LINE_ARGB), Offset(vfoX, 0f), Offset(vfoX, size.height), strokeWidth = 2f)
                 }
                 spots.forEach { spot ->
-                    val x = RadioFace.fractionForHz(spot.freqHz, window) * size.width
+                    val x = RadioFace.fractionForHz(spot.freqHz, hzSpan) * size.width
                     if (x < -8f || x > size.width + 8f) return@forEach
                     drawLine(RfGuru.blue.copy(alpha = 0.7f), Offset(x, waterTop), Offset(x, waterTop + 10f), strokeWidth = 1f)
                     val measured = measurer.measure(spot.call, if (spot.alert) alertStyle else spotStyle)

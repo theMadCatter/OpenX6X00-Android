@@ -37,9 +37,15 @@ import radio.kd0cq.x6100.net.RadioEndpoint
 import radio.kd0cq.x6100.net.TCI_PORT
 import radio.kd0cq.x6100.ui.RadioViewModel
 
-/** Finding the radio on the LAN, or naming it by hand when the resolver is not our friend. */
+/**
+ * Finding the radio on the LAN, or naming it by hand when the resolver is not our friend.
+ *
+ * A fresh install has no token. The socket still comes up, view only, and the operating chrome
+ * (Pair, Radio) used to stay hidden until a token existed — so this screen was a dead end.
+ * Once the link is up, Pair and Open the radio are both here.
+ */
 @Composable
-fun ConnectScreen(viewModel: RadioViewModel, onPaired: () -> Unit) {
+fun ConnectScreen(viewModel: RadioViewModel, onOpenRadio: () -> Unit, onPair: () -> Unit) {
     val found by viewModel.foundRadios.collectAsState()
     val phase by viewModel.phase.collectAsState()
     val error by viewModel.lastError.collectAsState()
@@ -96,8 +102,19 @@ fun ConnectScreen(viewModel: RadioViewModel, onPaired: () -> Unit) {
             enabled = looksLikeHost(host),
         ) { Text("Connect to $host") }
 
-        if (phase.online && viewModel.paired) {
-            OutlinedButton(onClick = onPaired) { Text("Open the radio") }
+        if (phase.online) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onOpenRadio) { Text("Open the radio") }
+                if (!viewModel.paired) {
+                    OutlinedButton(onClick = onPair) { Text("Pair") }
+                }
+            }
+            if (!viewModel.paired) {
+                Text(
+                    "View only until you pair. The radio screen still opens.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }

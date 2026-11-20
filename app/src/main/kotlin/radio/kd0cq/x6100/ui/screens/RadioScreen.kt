@@ -123,10 +123,14 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
 
     BoxWithConstraints(Modifier.fillMaxSize().background(RfGuru.bg)) {
         val landscape = maxWidth > maxHeight
+        // A phone on its side is about 400 dp tall. The roomy 78 dp meter leaves the scope
+        // with nothing, and the group strip then sits on the band plan.
+        val short = maxHeight < 520.dp
         Column(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
             if (landscape) {
                 LandscapeOperating(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    short = short,
                     viewModel = viewModel,
                     state = radio,
                     meter = meter,
@@ -152,7 +156,7 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                 )
             } else {
                 PortraitOperating(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                     viewModel = viewModel,
                     state = radio,
                     meter = meter,
@@ -186,6 +190,7 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                 micRefused = micRefused,
                 onMicRefused = { micRefused = it },
                 note = refusal ?: audioProblem,
+                pttHeight = if (short) 52.dp else 64.dp,
             )
         }
     }
@@ -236,6 +241,7 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
 @Composable
 private fun LandscapeOperating(
     modifier: Modifier,
+    short: Boolean,
     viewModel: RadioViewModel,
     state: RadioState?,
     meter: Double,
@@ -260,7 +266,13 @@ private fun LandscapeOperating(
     onPair: () -> Unit,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth().height(78.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // The scope is the only weighted child, so it keeps whatever the status, the frequency
+        // and the keys do not use. On a short landscape that leftover used to be the scale row
+        // alone, and GEN drew on top of the band plan.
+        Row(
+            Modifier.fillMaxWidth().height(if (short) 64.dp else 78.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             Column(
                 Modifier.weight(1.1f).fillMaxHeight().background(RfGuru.bar, RoundedCornerShape(8.dp)).padding(6.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
@@ -328,13 +340,16 @@ private fun PortraitOperating(
     onPlaceholder: (String) -> Unit,
     onPair: () -> Unit,
 ) {
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    // No scroll. A fixed 300 dp scope plus the sliders pushed F1–F5 under the PTT row, so the
+    // keys showed as a sliver. The scope takes the space that is left after the keys, and the
+    // keys stay on screen on a 1080×2400 phone.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
             ClockBlock(state?.battery, onPlaceholder)
         }
         StatusIconRow(onPlaceholder)
-        Row(Modifier.fillMaxWidth().height(300.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PortraitRail(state, page, canOperate, viewModel, onPage = {
                 val pageKey = page.keys.firstOrNull { it.action is radio.kd0cq.x6100.ui.face.FaceAction.NextPage }
                 if (pageKey != null) onKey(pageKey, +1) else onGroup(page.group)
@@ -357,11 +372,9 @@ private fun PortraitOperating(
                 )
             }
         }
-        // The rail's page key is the walkie's page button. The softkeys below are the radio's F1–F5.
-        RailButton(RadioFace.stepLabel(state?.stepIndex ?: 0)) {
-            if (canOperate) viewModel.setStep(RadioFace.nextStepIndex(state?.stepIndex ?: 0))
-        }
-        NeedleMeter(meter, state?.transmitting == true, tx, Modifier.fillMaxWidth().height(86.dp))
+        // Step stays on the frequency strip, next to LOCK. A second full-width "step 500" sat
+        // between the scope and the meter and pushed the softkeys off the screen.
+        NeedleMeter(meter, state?.transmitting == true, tx, Modifier.fillMaxWidth().height(72.dp))
         val volMax = volumeMax.coerceAtLeast(1).toFloat()
         CompactSlider("VOL", "${state?.volume ?: 0}", (state?.volume ?: 0).toFloat(), 0f..volMax, canOperate) {
             viewModel.setVolume(it)
@@ -575,6 +588,7 @@ private fun TransmitRow(
     micRefused: Boolean,
     onMicRefused: (Boolean) -> Unit,
     note: String?,
+    pttHeight: androidx.compose.ui.unit.Dp = 64.dp,
 ) {
     val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         onMicRefused(!granted)
@@ -587,7 +601,7 @@ private fun TransmitRow(
                 mayKey = mayKey,
                 onPress = { viewModel.pressPtt() },
                 onRelease = { viewModel.releasePtt() },
-                modifier = Modifier.weight(1f).height(64.dp),
+                modifier = Modifier.weight(1f).height(pttHeight),
             )
             MicSwitch(
                 checked = viewModel.transmitAudioFromPhone,

@@ -64,7 +64,13 @@ class MainActivity : ComponentActivity() {
      * looking at the radio, and the microphone is put back for them to use.
      */
     override fun onStop() {
-        RadioRigs.rig(application).ptt.wentToBackground()
+        // Rotation destroys this activity and creates another. onStop runs in between, but the
+        // operator is still looking at the radio: the rig lives on the application, not here.
+        // Treating that as backgrounding unkeys a live carrier and, when nothing was keyed,
+        // still used to paint "this app went to the background".
+        if (!isChangingConfigurations) {
+            RadioRigs.rig(application).ptt.wentToBackground()
+        }
         super.onStop()
     }
 

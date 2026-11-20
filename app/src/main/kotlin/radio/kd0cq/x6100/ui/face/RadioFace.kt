@@ -17,6 +17,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.log10
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import radio.kd0cq.x6100.net.Band
 import radio.kd0cq.x6100.net.PanelMode
@@ -357,6 +358,48 @@ object RadioFace {
         return best
     }
 
+    /**
+     * A short scale label. `14.074.000` becomes `14.074`; a non-zero hertz group keeps its digits
+     * until it would be wider than the tick it sits on.
+     */
+    fun scaleLabel(hz: Int): String {
+        val text = formatFrequency(hz)
+        val trimmed = if (text.endsWith(".000")) text.dropLast(4) else text
+        return if (trimmed.length > 7) trimmed.take(7) else trimmed
+    }
+
+    /**
+     * Where each scale label's left edge goes, or null when the label would sit on the one before it.
+     *
+     * The ticks include both edges of the span. On a phone the edge label is half outside the view
+     * if it is centred, and the next tick is only a few pixels in, so the two words draw on top of
+     * each other. Clamping keeps a label inside the view. Dropping the next one keeps a gap.
+     */
+    fun placeScaleLabels(
+        centersPx: List<Float>,
+        widthsPx: List<Float>,
+        viewWidthPx: Float,
+        gapPx: Float,
+    ): List<Float?> {
+        val placed = ArrayList<Float?>(centersPx.size)
+        var previousRight = Float.NEGATIVE_INFINITY
+        for (i in centersPx.indices) {
+            val width = widthsPx.getOrElse(i) { 0f }.coerceAtLeast(0f)
+            if (viewWidthPx <= width || width == 0f) {
+                placed += null
+                continue
+            }
+            val left = (centersPx[i] - width / 2f).coerceIn(0f, viewWidthPx - width)
+            if (left < previousRight + gapPx) {
+                placed += null
+            } else {
+                placed += left
+                previousRight = left + width
+            }
+        }
+        return placed
+    }
+
     /** Nice round ticks across the span, including both edges when they are not already a tick. */
     fun scaleTicks(span: HzSpan, maxLabels: Int = 6): List<Int> {
         val width = span.widthHz
@@ -401,11 +444,53 @@ object RadioFace {
     }
 
     /**
-     * Waterfall colour, weak to strong, in the same order as a classic SDR trace: near-black blue,
-     * blue, cyan, green, yellow, red, white. [db] is the signed byte the spectrum frame carries.
+     * A quiet band's int8 bins sit in a few dB around −110. Painting them on the full −128..0 scale
+     * leaves noise and weak signals in the same near-black stop, which is the flat navy waterfall.
+     * The window is at least this many dB, starting at the noise percentile, so that slice uses the
+     * whole ramp.
      */
-    fun waterfallArgb(db: Int): Int {
-        val t = ((db + 128) / 128f).coerceIn(0f, 1f)
+    const val WATERFALL_MIN_SPAN_DB = 36
+
+    /**
+     * Floor and ceiling for [waterfallArgb]. Floor is the 8th percentile (the noise, not one empty
+     * bin). Ceiling is the strong end of the frame, and never closer than [WATERFALL_MIN_SPAN_DB],
+     * so one carrier cannot squash the noise back to a single colour.
+     */
+    fun waterfallWindow(rows: List<ByteArray>): Pair<Int, Int> {
+        val hist = IntArray(256)
+        var count = 0
+        for (row in rows) {
+            for (sample in row) {
+                hist[(sample.toInt() + 128).coerceIn(0, 255)]++
+                count++
+            }
+        }
+        if (count == 0) return -120 to (-120 + WATERFALL_MIN_SPAN_DB)
+        fun percentile(fraction: Float): Int {
+            val target = ((count - 1) * fraction).toInt().coerceIn(0, count - 1)
+            var seen = 0
+            for (bin in 0..255) {
+                seen += hist[bin]
+                if (seen > target) return bin - 128
+            }
+            return 127
+        }
+        val floor = percentile(0.08f)
+        val peak = percentile(0.995f)
+        return floor to maxOf(peak, floor + WATERFALL_MIN_SPAN_DB)
+    }
+
+    /**
+     * Waterfall colour, weak to strong: near-black, blue, cyan, green, yellow, red, white.
+     *
+     * [floor] and [ceiling] are the window from [waterfallWindow]. The default window is the whole
+     * int8 range, which is what the endpoint checks use. A gamma below 1 opens the bottom of that
+     * window into the blue stops; without it a 10 dB wiggle in the noise stays one colour.
+     */
+    fun waterfallArgb(db: Int, floor: Int = -128, ceiling: Int = 0): Int {
+        val span = (ceiling - floor).coerceAtLeast(1)
+        val linear = ((db - floor).toFloat() / span).coerceIn(0f, 1f)
+        val t = linear.toDouble().pow(0.65).toFloat()
         val stops = floatArrayOf(0f, 0.18f, 0.36f, 0.52f, 0.66f, 0.78f, 0.90f, 1f)
         val colors = intArrayOf(
             0xFF000814.toInt(),
@@ -420,8 +505,8 @@ object RadioFace {
         var i = 1
         while (i < stops.size && t > stops[i]) i++
         if (i >= stops.size) return colors.last()
-        val span = (stops[i] - stops[i - 1]).takeIf { it > 0f } ?: 1f
-        val u = ((t - stops[i - 1]) / span).coerceIn(0f, 1f)
+        val stopSpan = (stops[i] - stops[i - 1]).takeIf { it > 0f } ?: 1f
+        val u = ((t - stops[i - 1]) / stopSpan).coerceIn(0f, 1f)
         return mixArgb(colors[i - 1], colors[i], u)
     }
 
