@@ -80,7 +80,8 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
     val bands by viewModel.bands.collectAsState()
     val plan by viewModel.plan.collectAsState()
     val spots by viewModel.spots.collectAsState()
-    val frame by viewModel.spectrum.collectAsState()
+    // The spectrum is collected inside the scope pane. Collecting it here recomposed the keys,
+    // the header and PTT on every FFT frame.
     val cw by viewModel.cwLines.collectAsState()
     val role by viewModel.role.collectAsState()
     val control by viewModel.control.collectAsState()
@@ -135,7 +136,6 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                 bands = bands,
                 plan = plan,
                 spots = spots,
-                frame = frame,
                 cw = cw.lastOrNull(),
                 canOperate = canOperate,
                 mayKey = mayKey,
@@ -166,7 +166,6 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                     bands = bands,
                     plan = plan,
                     spots = spots,
-                    frame = frame,
                     cw = cw.lastOrNull(),
                     canOperate = canOperate,
                     volumeMax = volumeMax,
@@ -249,7 +248,6 @@ private fun LandscapeOperating(
     bands: List<Band>,
     plan: List<radio.kd0cq.x6100.net.PlanSegment>,
     spots: List<radio.kd0cq.x6100.net.Spot>,
-    frame: radio.kd0cq.x6100.net.SpectrumFrame?,
     cw: String?,
     canOperate: Boolean,
     mayKey: Boolean,
@@ -278,7 +276,7 @@ private fun LandscapeOperating(
             onFreqGroup, onPlaceholder, onPair,
         )
         SpectrumStack(
-            frame = frame,
+            spectrum = viewModel.spectrum,
             state = state,
             plan = plan,
             spots = spots,
@@ -315,7 +313,7 @@ private fun LandscapeHeader(
 ) {
     val freq = state?.freqHz ?: 0
     Row(
-        Modifier.fillMaxWidth().height(52.dp),
+        Modifier.fillMaxWidth().height(64.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -364,7 +362,7 @@ private fun LandscapeHeader(
             db = meter,
             transmitting = state?.transmitting == true,
             tx = tx,
-            modifier = Modifier.width(118.dp).fillMaxHeight(),
+            modifier = Modifier.width(168.dp).fillMaxHeight(),
         )
     }
 }
@@ -391,18 +389,27 @@ private fun LandscapeDeck(
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(
-            Modifier.fillMaxWidth().height(44.dp),
+            Modifier.fillMaxWidth().height(52.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            GroupStrip(page.group, onGroup, Modifier.weight(0.9f))
-            SoftkeyBar(page, state, onKey, Modifier.weight(1.2f), barHeight = 40.dp)
+            // Groups scroll, so they can be the narrower part. The five keys need the width:
+            // at 40 dp, "TX power" was cut to "TX pow…" and the value sat on the bottom edge.
+            GroupStrip(page.group, onGroup, Modifier.weight(0.72f))
+            SoftkeyBar(
+                page,
+                state,
+                onKey,
+                Modifier.weight(1.6f),
+                barHeight = 52.dp,
+                compact = true,
+            )
             HoldToTalk(
                 keyed = keyed,
                 mayKey = mayKey,
                 onPress = { viewModel.pressPtt() },
                 onRelease = { viewModel.releasePtt() },
-                modifier = Modifier.width(120.dp).height(40.dp),
+                modifier = Modifier.width(88.dp).height(52.dp),
             )
             MicSwitch(
                 checked = viewModel.transmitAudioFromPhone,
@@ -437,7 +444,6 @@ private fun PortraitOperating(
     bands: List<Band>,
     plan: List<radio.kd0cq.x6100.net.PlanSegment>,
     spots: List<radio.kd0cq.x6100.net.Spot>,
-    frame: radio.kd0cq.x6100.net.SpectrumFrame?,
     cw: String?,
     canOperate: Boolean,
     volumeMax: Int,
@@ -471,7 +477,7 @@ private fun PortraitOperating(
             Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 FreqStrip(state, bands, freqGroup, canOperate, viewModel, onFreqGroup, onPlaceholder, large = false)
                 SpectrumStack(
-                    frame = frame,
+                    spectrum = viewModel.spectrum,
                     state = state,
                     plan = plan,
                     spots = spots,

@@ -30,8 +30,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -41,20 +43,29 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -68,8 +79,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.flow.StateFlow
 import radio.kd0cq.x6100.net.PlanSegment
 import radio.kd0cq.x6100.net.RadioState
 import radio.kd0cq.x6100.net.SpectrumFrame
@@ -78,25 +92,62 @@ import radio.kd0cq.x6100.net.TxMeters
 import radio.kd0cq.x6100.ui.theme.RfGuru
 import radio.kd0cq.x6100.ui.theme.packedArgb
 
-private fun waterfallImage(
-    rows: List<SpectrumSlice>,
-    floor: Int,
-    ceiling: Int,
-): androidx.compose.ui.graphics.ImageBitmap? {
-    if (rows.isEmpty()) return null
-    val bins = rows.first().db.size
-    if (bins <= 0) return null
-    val bmp = Bitmap.createBitmap(bins, rows.size, Bitmap.Config.ARGB_8888)
-    val pixels = IntArray(bins * rows.size)
-    for (y in rows.indices) {
-        val db = rows[y].db
-        for (x in 0 until bins) {
-            val sample = if (x < db.size) db[x].toInt() else floor
-            pixels[y * bins + x] = RadioFace.waterfallArgb(sample, floor, ceiling)
+/**
+ * One bitmap at the view's pixel size. Rows are painted 1:1, each pixel interpolated between
+ * the FFT bins at that frequency, so the bitmap is never a narrow strip that the canvas then
+ * stretches into blocks. The same bitmap is rewritten as frames arrive; a new one is made only
+ * when the pane changes size.
+ */
+private class WaterfallSheet {
+    private var bitmap: Bitmap? = null
+    private var image: androidx.compose.ui.graphics.ImageBitmap? = null
+    private var pixels = IntArray(0)
+
+    fun paint(
+        rows: List<SpectrumSlice>,
+        width: Int,
+        height: Int,
+        floor: Int,
+        ceiling: Int,
+        colors: IntArray,
+    ): androidx.compose.ui.graphics.ImageBitmap? {
+        if (width <= 1 || height <= 1 || rows.isEmpty() || colors.isEmpty()) return null
+        val view = rows.first()
+        var bmp = bitmap
+        if (bmp == null || bmp.width != width || bmp.height != height) {
+            bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bitmap = bmp
+            image = bmp.asImageBitmap()
         }
+        val need = width * height
+        if (pixels.size != need) pixels = IntArray(need)
+        val blank = colors.first()
+        val shown = min(rows.size, height)
+        for (y in 0 until height) {
+            val offset = y * width
+            val row = if (y < shown) rows[y] else null
+            if (row == null || row.db.isEmpty() || row.widthHz <= 0 || view.widthHz <= 0) {
+                pixels.fill(blank, offset, offset + width)
+                continue
+            }
+            for (x in 0 until width) {
+                pixels[offset + x] = WaterfallDisplay.colorAt(
+                    db = row.db,
+                    rowCentreHz = row.centreHz,
+                    rowWidthHz = row.widthHz,
+                    viewCentreHz = view.centreHz,
+                    viewWidthHz = view.widthHz,
+                    pixel = x,
+                    pixels = width,
+                    floor = floor,
+                    ceiling = ceiling,
+                    colors = colors,
+                )
+            }
+        }
+        bmp.setPixels(pixels, 0, width, 0, 0, width, height)
+        return image
     }
-    bmp.setPixels(pixels, 0, bins, 0, 0, bins, rows.size)
-    return bmp.asImageBitmap()
 }
 
 private val PillShape = RoundedCornerShape(6.dp)
@@ -212,42 +263,58 @@ fun NeedleMeter(
                 MeterBar("ALC", txView.alcText, txView.alc, RfGuru.blue)
             }
         } else {
+            // The radio's dial is an amber arc with S1, the odd S units, 9, +20 and +40.
+            // Three ticks and no words left the needle with nothing to be read against.
+            val measurer = rememberTextMeasurer()
+            val labelStyle = TextStyle(color = RfGuru.goldText, fontSize = 8.sp, fontFamily = Mono)
             Canvas(Modifier.fillMaxSize()) {
-                val pivot = Offset(size.width / 2f, size.height * 0.86f)
-                val radius = minOf(size.width * 0.46f, size.height * 0.78f)
+                val pivot = Offset(size.width / 2f, size.height * 0.82f)
+                val radius = minOf(size.width * 0.46f, size.height * 0.72f)
                 drawArc(
-                    color = RfGuru.gold.copy(alpha = 0.85f),
+                    color = RfGuru.gold,
                     startAngle = 180f,
                     sweepAngle = 180f,
                     useCenter = false,
                     topLeft = Offset(pivot.x - radius, pivot.y - radius),
                     size = Size(radius * 2, radius * 2),
-                    style = Stroke(width = 2.5f),
+                    style = Stroke(width = 2.2f),
                 )
-                // Tick at S1, S9 and +40 so the needle has the same landmarks as the radio's dial.
-                listOf(0f, (RadioFace.S9_DB - RadioFace.S1_DB).toFloat() / (RadioFace.S9_40_DB - RadioFace.S1_DB).toFloat(), 1f)
-                    .forEach { mark ->
-                        val rad = Math.toRadians((180.0 + mark * 180.0))
-                        val inner = radius * 0.82f
-                        val outer = radius * 0.98f
-                        drawLine(
-                            RfGuru.dim,
-                            Offset(pivot.x + (cos(rad) * inner).toFloat(), pivot.y + (sin(rad) * inner).toFloat()),
-                            Offset(pivot.x + (cos(rad) * outer).toFloat(), pivot.y + (sin(rad) * outer).toFloat()),
-                            strokeWidth = 2f,
-                        )
-                    }
+                RadioFace.sMeterMarks().forEach { (mark, label) ->
+                    val rad = Math.toRadians(180.0 + mark * 180.0)
+                    val cosR = cos(rad).toFloat()
+                    val sinR = sin(rad).toFloat()
+                    val major = label == "S1" || label == "9" || label == "+40"
+                    val inner = radius * if (major) 0.78f else 0.86f
+                    val outer = radius * 0.98f
+                    drawLine(
+                        RfGuru.gold,
+                        Offset(pivot.x + cosR * inner, pivot.y + sinR * inner),
+                        Offset(pivot.x + cosR * outer, pivot.y + sinR * outer),
+                        strokeWidth = if (major) 2.2f else 1.3f,
+                    )
+                    val measured = measurer.measure(label, labelStyle)
+                    val labelR = radius * 0.58f
+                    val left = (pivot.x + cosR * labelR - measured.size.width / 2f)
+                        .coerceIn(0f, (size.width - measured.size.width).coerceAtLeast(0f))
+                    val top = (pivot.y + sinR * labelR - measured.size.height / 2f)
+                        .coerceIn(0f, (size.height - measured.size.height).coerceAtLeast(0f))
+                    drawText(measured, topLeft = Offset(left, top))
+                }
                 val rad = Math.toRadians(180.0 + reading.needle * 180.0)
                 drawLine(
                     packedArgb(RadioFace.VFO_LINE_ARGB),
                     pivot,
-                    Offset(pivot.x + (cos(rad) * radius * 0.9).toFloat(), pivot.y + (sin(rad) * radius * 0.9).toFloat()),
-                    strokeWidth = 2.5f,
+                    Offset(
+                        pivot.x + (cos(rad) * radius * 0.9).toFloat(),
+                        pivot.y + (sin(rad) * radius * 0.9).toFloat(),
+                    ),
+                    strokeWidth = 2.4f,
+                    cap = StrokeCap.Round,
                 )
             }
             Text(
                 "${reading.caption}  ${RadioFace.formatDb(db)}",
-                color = RfGuru.text,
+                color = RfGuru.goldText,
                 fontFamily = Mono,
                 fontSize = 11.sp,
                 modifier = Modifier.align(Alignment.BottomCenter),
@@ -288,16 +355,22 @@ fun FrequencyReadout(
     textSize: androidx.compose.ui.unit.TextUnit? = null,
 ) {
     val parts = RadioFace.frequencyParts(freqHz)
-    val size = textSize ?: if (large) 32.sp else 26.sp
-    // The landscape header passes an explicit size. The +/− pair has to shrink with it or the
-    // header grows a second row and the waterfall loses the height that row would have taken.
+    // Segment digits, not a proportional face. The landscape header passes an explicit size so
+    // the +/− pair stays on one line and does not steal a row from the waterfall.
+    val digitH = when {
+        textSize != null && textSize.value <= 22f -> 22.dp
+        large -> 34.dp
+        else -> 28.dp
+    }
     val bump = if (textSize != null) 12.sp else 14.sp
+    val lit = RfGuru.goldText
+    val dim = RfGuru.text
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        FreqPart(parts.first, group == FreqGroup.MHZ, size) { onGroup(FreqGroup.MHZ) }
-        Text(".", color = RfGuru.gold, fontSize = size, fontFamily = Mono)
-        FreqPart(parts.second, group == FreqGroup.KHZ, size) { onGroup(FreqGroup.KHZ) }
-        Text(".", color = RfGuru.gold, fontSize = size, fontFamily = Mono)
-        FreqPart(parts.third, group == FreqGroup.HZ, size) { onGroup(FreqGroup.HZ) }
+        FreqPart(parts.first, group == FreqGroup.MHZ, digitH, lit, dim) { onGroup(FreqGroup.MHZ) }
+        SegmentGlyph('.', lit, digitH)
+        FreqPart(parts.second, group == FreqGroup.KHZ, digitH, lit, dim) { onGroup(FreqGroup.KHZ) }
+        SegmentGlyph('.', lit, digitH)
+        FreqPart(parts.third, group == FreqGroup.HZ, digitH, lit, dim) { onGroup(FreqGroup.HZ) }
         Column(Modifier.padding(start = 4.dp)) {
             Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(1) })
             Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(-1) })
@@ -306,42 +379,96 @@ fun FrequencyReadout(
 }
 
 @Composable
-private fun FreqPart(text: String, selected: Boolean, size: androidx.compose.ui.unit.TextUnit, onClick: () -> Unit) {
+private fun FreqPart(
+    text: String,
+    selected: Boolean,
+    digitH: androidx.compose.ui.unit.Dp,
+    lit: Color,
+    dim: Color,
+    onClick: () -> Unit,
+) {
     // The underline sits under the triplet. A single digit is too small a target on a phone,
     // so the tap selects MHz, kHz or Hz and the +/− beside the readout steps that group.
+    val color = if (selected) lit else dim
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable(onClick = onClick)
             .semantics { contentDescription = if (selected) "$text selected" else text },
     ) {
-        Text(
-            text = text,
-            color = if (selected) RfGuru.goldText else RfGuru.text,
-            fontSize = size,
-            fontWeight = FontWeight.Medium,
-            fontFamily = Mono,
-        )
+        Row {
+            text.forEach { ch -> SegmentGlyph(ch, color, digitH) }
+        }
         Box(
             Modifier
                 .padding(top = 1.dp)
                 .height(2.dp)
-                .width((text.length * 12).dp)
+                .fillMaxWidth()
                 .background(if (selected) RfGuru.gold else Color.Transparent),
         )
+    }
+}
+
+/** One 7-segment digit, or a decimal point. Unlit bars stay faintly on, as on the radio's display. */
+@Composable
+private fun SegmentGlyph(ch: Char, color: Color, height: androidx.compose.ui.unit.Dp) {
+    if (ch == '.') {
+        Box(
+            Modifier.width(height * 0.28f).height(height),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Box(
+                Modifier
+                    .padding(bottom = height * 0.12f)
+                    .size(height * 0.16f)
+                    .background(color, CircleShape),
+            )
+        }
+        return
+    }
+    val mask = RadioFace.segmentMask(ch)
+    Canvas(Modifier.width(height * 0.62f).height(height)) {
+        val w = size.width
+        val h = size.height
+        val t = (h * 0.12f).coerceAtLeast(1.4f)
+        val gap = t * 0.45f
+        val mid = h / 2f
+        val left = gap + t / 2f
+        val right = w - gap - t / 2f
+        fun seg(bit: Int, x0: Float, y0: Float, x1: Float, y1: Float) {
+            val on = mask and bit != 0
+            drawLine(
+                color = if (on) color else color.copy(alpha = 0.16f),
+                start = Offset(x0, y0),
+                end = Offset(x1, y1),
+                strokeWidth = t,
+                cap = StrokeCap.Round,
+            )
+        }
+        seg(1, left, t, right, t)
+        seg(2, right, t + gap, right, mid - gap)
+        seg(4, right, mid + gap, right, h - t - gap)
+        seg(8, left, h - t, right, h - t)
+        seg(16, left, mid + gap, left, h - t - gap)
+        seg(32, left, t + gap, left, mid - gap)
+        seg(64, left, mid, right, mid)
     }
 }
 
 /**
  * Spectrum, frequency scale, band-plan strip and a scrolling waterfall.
  *
- * A swipe turns the main knob. A tap tunes to the frequency under the finger, or to a spot when
- * the tap lands within [RadioFace.slopHz] of one. Every spot in the list is a target; the radio
- * sends newest first and a tie keeps the newer one.
+ * The spectrum flow is collected here, not in the screen. A frame then recomposes this pane
+ * and not the keys, the header or the PTT. The canvas sits on its own graphics layer for the
+ * same reason: the rest of the screen is not redrawn to scroll one waterfall row.
+ *
+ * A drag turns the main knob. A pinch maps onto the radio's zoom steps (fingers apart narrows
+ * the span, the same direction as a tap on the Zoom chip). A tap tunes to the frequency under
+ * the finger, or to a spot when the tap lands within [RadioFace.slopHz] of one.
  */
 @Composable
 fun SpectrumStack(
-    frame: SpectrumFrame?,
+    spectrum: StateFlow<SpectrumFrame?>,
     state: RadioState?,
     plan: List<PlanSegment>,
     spots: List<Spot>,
@@ -353,20 +480,35 @@ fun SpectrumStack(
     waterfallShare: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
-    val history = remember { SpectrumHistory(48) }
+    val frame by spectrum.collectAsState()
+    // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
+    // row per pixel instead of stretching 48 rows into blocks.
+    val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
+    val leveler = remember { WaterfallLeveler() }
+    val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
+    var mapName by rememberSaveable { mutableStateOf(WfColormap.GAUSS.name) }
+    val colormap = WfColormap.entries.firstOrNull { it.name == mapName } ?: WfColormap.GAUSS
+    val colors = remember(colormap) { WaterfallDisplay.palette(colormap) }
+    var paneWidth by remember { mutableIntStateOf(0) }
+    var waterRows by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
     LaunchedEffect(frame?.sequence, frame?.centreHz, frame?.widthHz) {
         val current = frame ?: return@LaunchedEffect
         history.push(current.db, current.centreHz, current.widthHz)
         tick++
     }
     val rows = remember(tick) { history.snapshot() }
-    // One window for the whole history. Scaling each row on its own makes the colours pump as
-    // the noise percentile jitters, and a quiet band then looks like a flat navy field.
-    val window = remember(tick) { RadioFace.waterfallWindow(rows.map { it.db }) }
-    // Built beside the canvas, not inside draw. drawImage keeps the bitmap until the frame is
-    // presented; recycling it in the draw pass blanks the waterfall.
-    val waterfall = remember(tick) { waterfallImage(rows, window.first, window.second) }
+    // The window eases toward the newest row. Taking the percentile of the whole history, or
+    // replacing it every frame, is what made a quiet band shimmer.
+    val window = remember(tick) {
+        rows.firstOrNull()?.db?.let { leveler.update(it) } ?: (leveler.floor to leveler.ceiling)
+    }
+    // Painted at the view's pixel width, one history row per pixel. Not inside draw: drawImage
+    // holds the bitmap until the frame is presented, and recycling it there blanks the waterfall.
+    val waterfall = remember(tick, paneWidth, waterRows, colormap) {
+        sheet.paint(rows, paneWidth, waterRows, window.first, window.second, colors)
+    }
     val measurer = rememberTextMeasurer()
     val span = frame?.let { RadioFace.spanOf(it.centreHz, it.widthHz) }
     val labelStyle = TextStyle(color = RfGuru.dim, fontSize = 10.sp, fontFamily = Mono)
@@ -375,10 +517,25 @@ fun SpectrumStack(
     val planText = TextStyle(color = RfGuru.bg, fontSize = 9.sp, fontFamily = Mono, fontWeight = FontWeight.Bold)
     val cwStyle = TextStyle(color = RfGuru.goldText, fontSize = 12.sp, fontFamily = Mono)
 
-    Box(modifier.background(Color.Black)) {
+    Box(
+        modifier
+            .background(Color.Black)
+            .onSizeChanged { size ->
+                paneWidth = size.width
+                val scalePx = with(density) { 16.dp.toPx() }
+                val planPx = with(density) { 14.dp.toPx() }
+                val guardPx = with(density) { 24.dp.toPx() }
+                val split = RadioFace.scopeSplit(size.height.toFloat(), scalePx, planPx, waterfallShare, guardPx)
+                val rowsHigh = split.waterfallPx.roundToInt().coerceIn(1, WaterfallDisplay.MAX_ROWS)
+                waterRows = rowsHigh
+                history.resize(rowsHigh)
+            },
+    ) {
         Canvas(
             Modifier
                 .fillMaxSize()
+                // Own layer: scrolling the waterfall does not repaint the keys or the header.
+                .graphicsLayer()
                 .pointerInput(canOperate, span, spots) {
                     if (span == null) return@pointerInput
                     awaitEachGesture {
@@ -386,25 +543,51 @@ fun SpectrumStack(
                         var total = 0f
                         var bucket = 0f
                         var dragged = false
+                        var pinched = false
+                        var pinch = 1f
                         while (true) {
                             val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
-                            val dx = change.positionChange().x
-                            total += dx
-                            bucket += dx
-                            if (abs(bucket) >= 36f && canOperate) {
-                                val steps = (bucket / 36f).toInt()
-                                if (steps != 0) {
-                                    onKnob(if (steps > 0) steps else steps)
-                                    bucket -= steps * 36f
-                                    dragged = true
-                                    change.consume()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            if (pressed.size >= 2) {
+                                // Fingers apart is a narrower span, the same way a tap on Zoom is.
+                                pinched = true
+                                val a = pressed[0]
+                                val b = pressed[1]
+                                val dist = hypot(a.position.x - b.position.x, a.position.y - b.position.y)
+                                val prev = hypot(
+                                    a.previousPosition.x - b.previousPosition.x,
+                                    a.previousPosition.y - b.previousPosition.y,
+                                )
+                                if (prev > 8f && dist > 8f && canOperate) {
+                                    pinch *= dist / prev
+                                    if (pinch >= 1.18f) {
+                                        onZoom(true)
+                                        pinch = 1f
+                                    } else if (pinch <= 1f / 1.18f) {
+                                        onZoom(false)
+                                        pinch = 1f
+                                    }
                                 }
+                                pressed.forEach { it.consume() }
+                            } else if (!pinched) {
+                                val change = pressed.firstOrNull { it.id == down.id } ?: pressed.first()
+                                val dx = change.positionChange().x
+                                total += dx
+                                bucket += dx
+                                if (abs(bucket) >= 36f && canOperate) {
+                                    val steps = (bucket / 36f).toInt()
+                                    if (steps != 0) {
+                                        onKnob(steps)
+                                        bucket -= steps * 36f
+                                        dragged = true
+                                        change.consume()
+                                    }
+                                }
+                                if (abs(total) > 12f) dragged = true
                             }
-                            if (abs(total) > 12f) dragged = true
                         }
-                        if (!dragged && canOperate) {
+                        if (!pinched && !dragged && canOperate) {
                             val fraction = (down.position.x / size.width).coerceIn(0f, 1f)
                             val hz = RadioFace.hzAtFraction(fraction, span)
                             val spot = RadioFace.nearestSpot(hz, spots, RadioFace.slopHz(span))
@@ -423,17 +606,22 @@ fun SpectrumStack(
             val waterTop = specH + scaleH + planH
             val waterH = split.waterfallPx
 
-            if (frame == null || frame.bins <= 0) {
+            val spectrumFrame = frame
+            if (spectrumFrame == null || spectrumFrame.bins <= 0) {
                 drawLine(RfGuru.dim, Offset(0f, specH / 2f), Offset(size.width, specH / 2f), strokeWidth = 1f)
             } else {
-                val bins = frame.bins
-                val stepX = size.width / bins
-                val dbSpan = (window.second - window.first).coerceAtLeast(1)
+                // One sample about every two pixels, linearly between bins, so a 1024-bin FFT
+                // does not draw as 1024 rectangles. The fill fades from the line down to the
+                // background, which is how the radio draws a filled trace.
+                val samples = (size.width / 2f).toInt().coerceIn(64, 900)
+                val dbSpan = (window.second - window.first).coerceAtLeast(1).toFloat()
                 val outline = Path()
-                for (i in 0 until bins) {
-                    val db = frame.db.getOrElse(i) { window.first.toByte() }.toInt()
-                    val v = ((db - window.first).toFloat() / dbSpan).coerceIn(0f, 1f)
-                    val x = i * stepX
+                for (i in 0 until samples) {
+                    val hz = WaterfallDisplay.hzAtPixel(i, samples, spectrumFrame.centreHz, spectrumFrame.widthHz)
+                    val index = WaterfallDisplay.binAtHz(hz, spectrumFrame.centreHz, spectrumFrame.widthHz, spectrumFrame.bins)
+                    val db = WaterfallDisplay.sampleBin(spectrumFrame.db, index) ?: window.first.toFloat()
+                    val v = ((db - window.first) / dbSpan).coerceIn(0f, 1f)
+                    val x = if (samples == 1) 0f else i * size.width / (samples - 1).toFloat()
                     val y = specH * (1f - v * 0.92f)
                     if (i == 0) outline.moveTo(x, y) else outline.lineTo(x, y)
                 }
@@ -443,15 +631,25 @@ fun SpectrumStack(
                     lineTo(0f, specH)
                     close()
                 }
-                drawPath(fill, Color.White.copy(alpha = 0.16f))
-                drawPath(outline, Color.White.copy(alpha = 0.92f), style = Stroke(width = 1.6f))
+                drawPath(
+                    fill,
+                    Brush.verticalGradient(
+                        0f to Color(0xCCF1F5F9),
+                        1f to Color(0x0008090C),
+                        startY = 0f,
+                        endY = specH.coerceAtLeast(1f),
+                    ),
+                )
+                drawPath(outline, Color(0xFFF1F5F9), style = Stroke(width = 1.5f))
             }
 
             if (waterfall != null && waterH > 1f) {
+                // The bitmap is already the view's pixel size. Stretching it here is what made
+                // the blocks, so it is drawn 1:1 and any leftover pixel stays the background.
                 drawImage(
                     image = waterfall,
-                    dstOffset = androidx.compose.ui.unit.IntOffset(0, waterTop.toInt()),
-                    dstSize = androidx.compose.ui.unit.IntSize(size.width.toInt().coerceAtLeast(1), waterH.toInt().coerceAtLeast(1)),
+                    dstOffset = androidx.compose.ui.unit.IntOffset(0, waterTop.roundToInt()),
+                    filterQuality = FilterQuality.None,
                 )
             }
 
@@ -542,6 +740,22 @@ fun SpectrumStack(
                 .padding(horizontal = 6.dp, vertical = 2.dp)
                 .semantics { contentDescription = "Spectrum zoom. Tap narrows, hold widens" },
         )
+        Text(
+            text = colormap.label,
+            color = RfGuru.goldText,
+            fontSize = 11.sp,
+            fontFamily = Mono,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 2.dp, start = 4.dp)
+                .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
+                .clickable {
+                    val next = colormap.next()
+                    mapName = next.name
+                }
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .semantics { contentDescription = "Waterfall colours ${colormap.label}. Tap for the next palette" },
+        )
     }
 }
 
@@ -574,8 +788,11 @@ fun SoftkeyBar(
     onKey: (FaceKey, Int) -> Unit,
     modifier: Modifier = Modifier,
     barHeight: androidx.compose.ui.unit.Dp = 58.dp,
+    compact: Boolean = false,
 ) {
-    val pad = if (barHeight < 48.dp) 1.dp else 4.dp
+    // A 40 dp bar with 1 dp of padding clipped the value line against the bottom edge.
+    // Compact landscape keys keep 4 dp inside a bar tall enough for two lines.
+    val pad = if (compact) 4.dp else if (barHeight < 48.dp) 3.dp else 4.dp
     Row(modifier.height(barHeight), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for (slot in 0 until 5) {
             val key = page.keys.getOrNull(slot)
@@ -614,12 +831,12 @@ fun SoftkeyBar(
                             },
                     ) {
                         Column(
-                            Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = pad),
+                            Modifier.fillMaxSize().padding(horizontal = 3.dp, vertical = pad),
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Text(
-                                label.title,
+                                if (compact) RadioFace.compactKeyTitle(label.title) else label.title,
                                 color = if (pageKey) RfGuru.dim else RfGuru.text,
                                 fontSize = 11.sp,
                                 fontFamily = Mono,

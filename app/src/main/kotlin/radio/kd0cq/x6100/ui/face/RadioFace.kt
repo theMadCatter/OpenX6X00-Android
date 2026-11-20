@@ -132,15 +132,28 @@ data class SpectrumSlice(val db: ByteArray, val centreHz: Int, val widthHz: Int)
 }
 
 /**
- * A short scrolling waterfall. Newest row is index 0 of [snapshot], which is how the radio draws it:
- * the line under the spectrum is the frame that just arrived, and older frames move down.
+ * Scrolling waterfall rows. Newest is index 0 of [snapshot]: the line under the spectrum is the
+ * frame that just arrived, and older frames move down.
+ *
+ * The depth is the waterfall's pixel height, not a fixed 48. A tall landscape pane then has a
+ * row of history for every pixel instead of one row stretched across several. [resize] trims to
+ * that height. The cap is [WaterfallDisplay.MAX_ROWS], the firmware's own buffer.
  */
-class SpectrumHistory(val capacity: Int = 48) {
+class SpectrumHistory(capacity: Int = WaterfallDisplay.MAX_ROWS) {
+    var capacity: Int = capacity.coerceIn(1, WaterfallDisplay.MAX_ROWS)
+        private set
+
     private val rows = ArrayDeque<SpectrumSlice>()
 
     fun clear() = rows.clear()
 
     fun snapshot(): List<SpectrumSlice> = rows.toList()
+
+    /** Keep [rows] lines. Extra history is dropped from the oldest end. */
+    fun resize(rows: Int) {
+        capacity = rows.coerceIn(1, WaterfallDisplay.MAX_ROWS)
+        while (this.rows.size > capacity) this.rows.removeLast()
+    }
 
     fun push(db: ByteArray, centreHz: Int, widthHz: Int): List<SpectrumSlice> {
         rows.addFirst(SpectrumSlice(db.copyOf(), centreHz, widthHz))
@@ -305,6 +318,55 @@ object RadioFace {
             "S$unit"
         }
         return SMeterReading(db, needle, caption)
+    }
+
+    /**
+     * The amber dial's marks, in the same units as [SMeterReading.needle]: 0 is S1, 1 is +40.
+     * S3, S5 and S7 are every 6 dB from S1. +20 is 20 dB over S9. These are the labels the
+     * radio prints on the arc; the caption under the needle is the live reading.
+     */
+    fun sMeterMarks(): List<Pair<Float, String>> {
+        val span = S9_40_DB - S1_DB
+        fun at(db: Double) = ((db - S1_DB) / span).toFloat()
+        return listOf(
+            at(S1_DB) to "S1",
+            at(S1_DB + 12.0) to "3",
+            at(S1_DB + 24.0) to "5",
+            at(S1_DB + 36.0) to "7",
+            at(S9_DB) to "9",
+            at(S9_DB + 20.0) to "+20",
+            at(S9_40_DB) to "+40",
+        )
+    }
+
+    /**
+     * Landscape keys are about 56 dp wide. "TX power" becomes "TX pow…" there; these shorter
+     * words are the same control, and portrait still uses the full title.
+     */
+    fun compactKeyTitle(title: String): String = when (title) {
+        "TX power" -> "TX pwr"
+        "RF gain" -> "RF"
+        "Volume" -> "Vol"
+        "Squelch" -> "Sql"
+        else -> title
+    }
+
+    /**
+     * Which segments of a digit are lit. Bit 0 is the top bar (a), then upper-right (b),
+     * lower-right (c), bottom (d), lower-left (e), upper-left (f), middle (g).
+     */
+    fun segmentMask(ch: Char): Int = when (ch) {
+        '0' -> 0b0111111
+        '1' -> 0b0000110
+        '2' -> 0b1011011
+        '3' -> 0b1001111
+        '4' -> 0b1100110
+        '5' -> 0b1101101
+        '6' -> 0b1111101
+        '7' -> 0b0000111
+        '8' -> 0b1111111
+        '9' -> 0b1101111
+        else -> 0
     }
 
     /**
