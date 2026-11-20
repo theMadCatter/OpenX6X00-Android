@@ -30,11 +30,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -47,6 +52,8 @@ import androidx.compose.ui.unit.sp
 import radio.kd0cq.x6100.net.PanelCommands
 import radio.kd0cq.x6100.ui.RadioViewModel
 import radio.kd0cq.x6100.ui.face.RadioFace
+import radio.kd0cq.x6100.ui.face.ScreenPicture
+import radio.kd0cq.x6100.ui.face.WaterfallDisplay
 import radio.kd0cq.x6100.ui.theme.RfGuru
 
 private val fallbackKeys = listOf(
@@ -61,10 +68,33 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
     val frame by viewModel.screen.collectAsState()
     val reported by viewModel.keyNames.collectAsState()
     var pictureOnImage by remember { mutableStateOf(false) }
+    var fullScreen by remember { mutableStateOf(false) }
+    // Sharp is the picture a good link can carry. Fast (half size) is only asked for once
+    // frames are actually late. An unchanged screen repeats about once a second, and that
+    // gap is not treated as lag.
+    var picture by remember { mutableStateOf(PanelCommands.Picture.SHARP) }
+    var fellBack by remember { mutableStateOf(false) }
+    val gaps = remember { ArrayDeque<Long>() }
+    var lastFrameAt by remember { mutableLongStateOf(0L) }
 
     DisposableEffect(Unit) {
-        viewModel.wantScreenFrames(true)
+        viewModel.wantScreenFrames(true, PanelCommands.Picture.SHARP)
         onDispose { viewModel.wantScreenFrames(false) }
+    }
+    LaunchedEffect(frame?.sequence) {
+        if (frame == null) return@LaunchedEffect
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastFrameAt != 0L && picture == PanelCommands.Picture.SHARP) {
+            gaps.addLast(now - lastFrameAt)
+            while (gaps.size > 6) gaps.removeFirst()
+            val next = WaterfallDisplay.nextScreenPicture(ScreenPicture.SHARP, gaps.toList())
+            if (next == ScreenPicture.FAST) {
+                picture = PanelCommands.Picture.FAST
+                fellBack = true
+                viewModel.wantScreenFrames(true, PanelCommands.Picture.FAST)
+            }
+        }
+        lastFrameAt = now
     }
 
     val image = remember(frame?.sequence) {
@@ -73,6 +103,38 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
     }
     val keys = (if (reported.isEmpty()) fallbackKeys else reported)
         .filterNot { RadioFace.isCarrierKey(it) || it.equals("POWER", ignoreCase = true) }
+
+    fun choosePicture(next: PanelCommands.Picture) {
+        picture = next
+        fellBack = false
+        gaps.clear()
+        lastFrameAt = 0L
+        viewModel.wantScreenFrames(true, next)
+    }
+
+    if (fullScreen && image != null) {
+        // The framebuffer is 800×480, the radio's landscape screen. Tapping it fills the phone
+        // with that picture; tapping again closes it. The keys stay on the page underneath.
+        Dialog(
+            onDismissRequest = { fullScreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .clickable { fullScreen = false },
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = image,
+                    contentDescription = "Radio screen, full screen. Tap to close",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
 
     Column(
         Modifier
@@ -88,10 +150,24 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Screen", color = RfGuru.gold, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
-            PictureChip("Fast") { viewModel.wantScreenFrames(true, PanelCommands.Picture.FAST) }
-            PictureChip("Balanced") { viewModel.wantScreenFrames(true, PanelCommands.Picture.BALANCED) }
-            PictureChip("Sharp") { viewModel.wantScreenFrames(true, PanelCommands.Picture.SHARP) }
-            PictureChip(if (pictureOnImage) "Keys on picture" else "Keys below") { pictureOnImage = !pictureOnImage }
+            PictureChip("Fast", picture == PanelCommands.Picture.FAST) {
+                choosePicture(PanelCommands.Picture.FAST)
+            }
+            PictureChip("Balanced", picture == PanelCommands.Picture.BALANCED) {
+                choosePicture(PanelCommands.Picture.BALANCED)
+            }
+            PictureChip("Sharp", picture == PanelCommands.Picture.SHARP) {
+                choosePicture(PanelCommands.Picture.SHARP)
+            }
+            PictureChip(if (pictureOnImage) "Keys on picture" else "Keys below", false) {
+                pictureOnImage = !pictureOnImage
+            }
+            if (image != null) {
+                PictureChip("Full screen", false) { fullScreen = true }
+            }
+            if (fellBack) {
+                Text("Fast: frames were late", color = RfGuru.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            }
         }
         // The framebuffer is 800×480. A weight(1) box letterboxed it with a tall black margin.
         // The card is the picture's own shape; the knobs and keys use the space under it.
@@ -113,9 +189,11 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
             } else {
                 Image(
                     bitmap = image,
-                    contentDescription = "Radio screen",
+                    contentDescription = "Radio screen. Tap for the full landscape picture",
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (!pictureOnImage) Modifier.clickable { fullScreen = true } else Modifier),
                 )
             }
             if (pictureOnImage) {
@@ -182,14 +260,14 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.keyGestu
 }
 
 @Composable
-private fun PictureChip(label: String, onClick: () -> Unit) {
+private fun PictureChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         label,
-        color = RfGuru.goldText,
+        color = if (selected) RfGuru.barBottom else RfGuru.goldText,
         fontSize = 11.sp,
         fontFamily = FontFamily.Monospace,
         modifier = Modifier
-            .background(RfGuru.button, RoundedCornerShape(6.dp))
+            .background(if (selected) RfGuru.gold else RfGuru.button, RoundedCornerShape(6.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )

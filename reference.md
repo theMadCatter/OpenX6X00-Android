@@ -169,3 +169,17 @@ Portrait, Connect, the status-bar inset, F1–F5, the duplicate step, the waterf
 - **Landscape waterfall.** The header was two full-width rows and PTT was another full-width bar, so the waterfall was a thin strip. Landscape now uses one 52 dp header (pills, frequency, meter) and one 44 dp row (groups, F1–F5, PTT, mic). The scope takes the rest, and `scopeSplit` gives the waterfall about 73% of that pane. Portrait is unchanged.
 
 `./gradlew testDebugUnitTest assembleDebug` after the Screen-tab and landscape rework: **168 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+## Display quality (bee8510 follow-up)
+
+The native waterfall was one bitmap column per FFT bin, stretched to the phone. On a landscape screen that is about two pixels per bin, so it looked grainy and blocky next to the radio's own framebuffer. The colour window was also recomputed from scratch every frame, so the field shimmered.
+
+- **Drawing.** Each waterfall row is now painted at the view's pixel width. A pixel samples the bins on either side of its frequency (the firmware's `row_pixels`), and a row is placed by the frequency it was taken at, so tuning slides the history instead of smearing it. The spectrum trace is the same interpolation, with a vertical gradient under the line. Colours are the firmware palettes: Classic and Gauss are the 256-entry tables in `wf_palettes.c`; Grey, Fire, Ice and Rainbow are the stops in `waterfall_view.c` run through `theme_ramp_palette`. Gauss is the default because the RF.Guru theme uses that table. A chip on the scope steps through them. The noise floor and the ceiling ease toward the newest row (`WaterfallLeveler`) instead of jumping.
+- **What the socket can send.** `remote_server.c` always sends `WATERFALL_NFFT` bins, which is `RADIO_SAMPLES * 2` = 1024 int8 dB values, once per new DSP spectrum, and it skips a frame while 16 KB is still queued for that client. The comment there says "up to 15 a second". There is no Panel command for a larger FFT or a faster rate, so none was invented. The history depth is the waterfall's pixel height, capped at the firmware's 480 rows, instead of a fixed 48 that then got stretched.
+- **Recomposition.** The radio screen no longer collects the spectrum flow. The scope does, and its canvas is on its own graphics layer, so a frame does not recompose the keys, the header or PTT. A drag still turns the main knob. A pinch steps the existing `zoom` set (fingers apart narrows the span).
+- **Widgets.** The frequency is 7-segment digits. The S-meter arc has amber ticks and the labels S1, 3, 5, 7, 9, +20, +40. The landscape deck is 52 dp: shorter key titles (`TX pwr`, `RF`, `Vol`, `Sql`), padding so the value is not on the bottom edge, and a narrower PTT so the five keys have the width.
+- **Screen tab.** It asks for `picture sharp` first. Four late gaps (not the once-a-second still-screen repeat, `STILL_MS`) fall back to `picture fast`. A tap, or the Full screen chip, opens the 800×480 framebuffer across the phone. Tap again to close.
+
+PTT, the lease, `PanelEventBus` and pairing are unchanged.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **175 tests, 0 failures, 0 errors** (168, plus the palette, interpolation, level, screen-picture and dial tests). `assembleDebug`: BUILD SUCCESSFUL. No emulator in this environment, so the sharper waterfall was not re-shot here.
