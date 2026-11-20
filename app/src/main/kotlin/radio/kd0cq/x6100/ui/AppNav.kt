@@ -118,7 +118,12 @@ fun AppNav(viewModel: RadioViewModel) {
             contentColor = RfGuru.text,
             topBar = {
                 if (onOperating) {
-                    Row(Modifier.background(RfGuru.bar), verticalAlignment = Alignment.CenterVertically) {
+                    // The bar used to start at y = 0, under the status clock. The inset is part of
+                    // the bar's own height so "OpenX6X00" sits below 9:23, not through it.
+                    Row(
+                        Modifier.background(RfGuru.bar).statusBarsPadding(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             "OpenX6X00",
                             color = RfGuru.gold,
@@ -170,7 +175,11 @@ private fun go(nav: NavHostController, route: Route) {
 
 private fun androidx.navigation.NavGraphBuilder.screens(nav: NavHostController, viewModel: RadioViewModel) {
     composable(Route.CONNECT.path) {
-        ConnectScreen(viewModel, onPaired = { nav.navigate(Route.RADIO.path) })
+        ConnectScreen(
+            viewModel,
+            onOpenRadio = { nav.navigate(Route.RADIO.path) { launchSingleTop = true } },
+            onPair = { nav.navigate(Route.PAIRING.path) { launchSingleTop = true } },
+        )
     }
     composable(Route.PAIRING.path) {
         PairingScreen(viewModel, onDone = { nav.popBackStack() })

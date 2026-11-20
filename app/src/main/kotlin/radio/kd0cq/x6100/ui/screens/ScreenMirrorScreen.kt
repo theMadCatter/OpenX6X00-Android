@@ -18,10 +18,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -53,6 +57,7 @@ private val fallbackKeys = listOf(
     "BAND_UP", "BAND_DOWN", "AM", "CW", "SSB", "MSG", "FST",
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScreenMirrorScreen(viewModel: RadioViewModel) {
     val frame by viewModel.screen.collectAsState()
@@ -72,20 +77,30 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
         .filterNot { RadioFace.isCarrierKey(it) || it.equals("POWER", ignoreCase = true) }
 
     Column(
-        Modifier.fillMaxSize().background(RfGuru.bg).padding(8.dp),
+        Modifier
+            .fillMaxSize()
+            .background(RfGuru.bg)
+            .verticalScroll(rememberScrollState())
+            .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text("Screen", color = RfGuru.gold, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
             PictureChip("Fast") { viewModel.wantScreenFrames(true, PanelCommands.Picture.FAST) }
             PictureChip("Balanced") { viewModel.wantScreenFrames(true, PanelCommands.Picture.BALANCED) }
             PictureChip("Sharp") { viewModel.wantScreenFrames(true, PanelCommands.Picture.SHARP) }
             PictureChip(if (pictureOnImage) "Keys on picture" else "Keys below") { pictureOnImage = !pictureOnImage }
         }
+        // The framebuffer is 800×480. A weight(1) box letterboxed it with a tall black margin.
+        // The card is the picture's own shape; the knobs and keys use the space under it.
         Box(
             Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .aspectRatio(800f / 480f)
                 .background(RfGuru.bar, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center,
         ) {
@@ -125,9 +140,12 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
             KnobPair("VOL", Modifier.weight(1f)) { viewModel.turnKnob("vol", it) }
             KnobPair("MFK", Modifier.weight(1f)) { viewModel.turnKnob("mfk", it) }
         }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        // A single scrolling row cut "MSG" to "MS" at the screen edge. Wrapping keeps every
+        // label whole; the column above scrolls if the wrap takes more than one line.
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             keys.forEach { name ->
                 Text(
@@ -135,6 +153,8 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
                     color = RfGuru.text,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    softWrap = false,
                     modifier = Modifier
                         .background(RfGuru.button, RoundedCornerShape(8.dp))
                         .pointerInput(name) { keyGesture(viewModel, name) }

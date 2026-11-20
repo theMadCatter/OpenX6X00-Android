@@ -10,6 +10,7 @@ package radio.kd0cq.x6100.ui.face
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -111,6 +112,38 @@ class RadioFaceTest {
         assertEquals(0xFF000814.toInt(), RadioFace.waterfallArgb(-128))
         assertEquals(0xFFFFFFFF.toInt(), RadioFace.waterfallArgb(0))
         assertTrue((RadioFace.waterfallArgb(-40) ushr 16 and 0xFF) > 0x20)
+    }
+
+    @Test
+    fun waterfallWindowLiftsNoiseOffTheBlackStop() {
+        // A quiet 20 m band: almost every bin near −108, one carrier at −70. The full −128..0
+        // scale paints both in the same navy. The window has to open at least the minimum span,
+        // and the noise sample has to leave the floor colour.
+        val row = ByteArray(200) { (-108).toByte() }
+        row[0] = (-100).toByte()
+        row[1] = (-96).toByte()
+        row[2] = (-70).toByte()
+        val (floor, ceiling) = RadioFace.waterfallWindow(listOf(row))
+        assertTrue(ceiling - floor >= RadioFace.WATERFALL_MIN_SPAN_DB)
+        val noise = RadioFace.waterfallArgb(-104, floor, ceiling)
+        val signal = RadioFace.waterfallArgb(-70, floor, ceiling)
+        assertTrue(noise != signal)
+        assertTrue(noise != RadioFace.waterfallArgb(floor, floor, ceiling))
+    }
+
+    @Test
+    fun scaleLabelsStayInsideTheViewAndDoNotStack() {
+        assertEquals("14.060", RadioFace.scaleLabel(14_060_000))
+        val lefts = RadioFace.placeScaleLabels(
+            centersPx = listOf(0f, 30f, 200f),
+            widthsPx = listOf(40f, 40f, 40f),
+            viewWidthPx = 220f,
+            gapPx = 4f,
+        )
+        assertEquals(0f, lefts[0])
+        assertNull(lefts[1])
+        assertNotNull(lefts[2])
+        assertTrue(lefts[2]!! + 40f <= 220f)
     }
 
     @Test
