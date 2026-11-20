@@ -7,8 +7,10 @@ package radio.kd0cq.x6100
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,7 +36,11 @@ class MainActivity : ComponentActivity() {
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // RF.Guru is a night face. Light system bars would draw black glyphs on the black window.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.parseColor("#FF08090C")),
+            navigationBarStyle = SystemBarStyle.dark(Color.parseColor("#FF08090C")),
+        )
         super.onCreate(savedInstanceState)
         // Build the shared link before any screen reads its flows; the service starts it later.
         RadioLinks.link(application)

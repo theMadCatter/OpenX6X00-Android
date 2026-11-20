@@ -17,6 +17,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import radio.kd0cq.x6100.ui.face.PENDING_FIRMWARE
+import radio.kd0cq.x6100.ui.face.RadioFace
+import radio.kd0cq.x6100.ui.theme.RfGuru
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,7 +35,7 @@ import radio.kd0cq.x6100.ui.RadioViewModel
  * here without mDNS. Nothing on this screen is a guess: every line comes from the radio itself.
  */
 @Composable
-fun SettingsScreen(viewModel: RadioViewModel) {
+fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
     val phase by viewModel.phase.collectAsState()
     val tciPhase by viewModel.tciPhase.collectAsState()
     val hello by viewModel.hello.collectAsState()
@@ -45,7 +49,8 @@ fun SettingsScreen(viewModel: RadioViewModel) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Setup", style = MaterialTheme.typography.headlineSmall)
+        TextButton(onClick = onBack) { Text("Back", color = RfGuru.gold) }
+        Text("Setup", style = MaterialTheme.typography.headlineSmall, color = RfGuru.gold)
 
         Text("Link", style = MaterialTheme.typography.titleMedium)
         Line("panel", phase.name.lowercase())
@@ -88,6 +93,15 @@ fun SettingsScreen(viewModel: RadioViewModel) {
             OutlinedButton(onClick = { viewModel.connectToHost(host) }, enabled = phase != LinkPhase.CONNECTING) {
                 Text("Connect to $host")
             }
+        }
+
+        Text("Radio menus the Panel link does not carry", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+        Text(
+            "These are on the radio. $PENDING_FIRMWARE, so the buttons on the face only name them.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        RadioFace.pendingFeatures().forEach { feature ->
+            Line(feature.group, feature.name)
         }
 
         Text("What the audio path does not do", style = MaterialTheme.typography.titleMedium)

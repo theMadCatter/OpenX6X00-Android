@@ -33,7 +33,7 @@ fun Ft8Screen(viewModel: RadioViewModel) {
     val role by viewModel.role.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("FT8", style = MaterialTheme.typography.headlineSmall)
+        Text("FT8", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         Text(
             status?.let {
                 "open ${it.open}  cq ${it.callingCq}  tx ${it.transmitting}  auto ${it.autoOn}  " +

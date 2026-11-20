@@ -5,6 +5,7 @@
 
 package radio.kd0cq.x6100.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -28,15 +28,15 @@ import radio.kd0cq.x6100.ui.RadioViewModel
 
 /**
  * The cluster spots the radio holds from its own client, newest first. The radio pushes them as they
- * change, so the list is what the radio last told us; tuning one moves the VFO by detents, which is
- * what the panel protocol allows without a frequency of its own.
+ * change, so the list is what the radio last told us. Every row tunes with `set freq`, which the
+ * panel protocol does take. The newest spot is not a special case.
  */
 @Composable
 fun SpotsScreen(viewModel: RadioViewModel) {
     val spots by viewModel.spots.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Spots", style = MaterialTheme.typography.headlineSmall)
+        Text("Spots", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         Text(
             "from the radio's cluster client, newest first",
             style = MaterialTheme.typography.bodySmall,
@@ -50,15 +50,18 @@ fun SpotsScreen(viewModel: RadioViewModel) {
             )
         }
         LazyColumn(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            itemsIndexed(spots) { index, spot -> SpotRow(spot, index == 0, onTune = { viewModel.setFrequency(it) }) }
+            itemsIndexed(spots) { _, spot -> SpotRow(spot, onTune = { viewModel.setFrequency(it) }) }
         }
     }
 }
 
 @Composable
-private fun SpotRow(spot: Spot, newest: Boolean, onTune: (Int) -> Unit) {
+private fun SpotRow(spot: Spot, onTune: (Int) -> Unit) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onTune(spot.freqHz) }
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -72,10 +75,6 @@ private fun SpotRow(spot: Spot, newest: Boolean, onTune: (Int) -> Unit) {
             fontFamily = FontFamily.Monospace,
         )
         spot.comment.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        if (newest) {
-            OutlinedButton(onClick = { onTune(spot.freqHz) }) {
-                Text("Tune to this spot")
-            }
-        }
+        Text("Tap to tune", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
     }
 }

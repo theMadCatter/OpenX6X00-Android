@@ -66,7 +66,7 @@ or an earlier up-command never left, rather than walking away from one.
 ## Layers and the fail-safe path through them
 
 ```
-ControlsScreen (press-and-hold button)
+HoldToTalkButton on the radio screen (press-and-hold)
     └─ RadioViewModel.pressPtt() / releasePtt()
         └─ LeasePttController            ptt/LeasePttController.kt
             ├─ PttLeaseStateMachine      core/PttLeaseStateMachine.kt   (Panel path)

@@ -43,7 +43,7 @@ fun PairingScreen(viewModel: RadioViewModel, onDone: () -> Unit) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Pair with the radio", style = MaterialTheme.typography.headlineSmall)
+        Text("Pair with the radio", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         Text(
             "Press Pair on the radio's Remote page, type the six digits it shows, and this app keeps the " +
                 "token it answers with so the next connection needs no code.",
