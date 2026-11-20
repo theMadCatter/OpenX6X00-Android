@@ -400,6 +400,69 @@ object RadioFace {
         return placed
     }
 
+    /**
+     * Key names broken into rows that fit [widthDp].
+     *
+     * Compose Foundation in this project does not have the `FlowRow` overflow overload the
+     * compiler emits, and that call crashed the Screen tab (`NoSuchMethodError`). A single
+     * scrolling row also cut the last name in half at the screen edge. Each chip is about
+     * [charDp] per letter plus [chromeDp] for its padding and the gap, which is enough to keep
+     * `MSG` and `BAND_DOWN` whole on a plain row.
+     */
+    fun packKeyRows(
+        labels: List<String>,
+        widthDp: Float,
+        charDp: Float = 7.5f,
+        chromeDp: Float = 26f,
+    ): List<List<String>> {
+        if (labels.isEmpty()) return emptyList()
+        if (widthDp <= 0f) return listOf(labels)
+        val rows = ArrayList<List<String>>()
+        var current = ArrayList<String>()
+        var used = 0f
+        for (label in labels) {
+            val chip = label.length * charDp + chromeDp
+            if (current.isNotEmpty() && used + chip > widthDp) {
+                rows += current
+                current = ArrayList()
+                used = 0f
+            }
+            current += label
+            used += chip
+        }
+        if (current.isNotEmpty()) rows += current
+        return rows
+    }
+
+    /**
+     * How a scope pane divides between the spectrum trace and the waterfall.
+     *
+     * [waterfallShare] is the fraction of the whole pane (trace, scale, plan, waterfall) the
+     * waterfall should keep. On a phone lying on its side that share is about three quarters, so
+     * the scrolling history is actually readable. The trace still keeps [zoomGuardPx] when the
+     * pane can spare it, which is what holds the Zoom chip above the frequency ticks.
+     * A share of 0 is the portrait split: the trace is 40% of the room left after the scale and plan.
+     */
+    data class ScopeSplit(val spectrumPx: Float, val waterfallPx: Float)
+
+    fun scopeSplit(
+        heightPx: Float,
+        scalePx: Float,
+        planPx: Float,
+        waterfallShare: Float,
+        zoomGuardPx: Float,
+    ): ScopeSplit {
+        if (heightPx <= 0f) return ScopeSplit(0f, 0f)
+        val room = (heightPx - scalePx - planPx).coerceAtLeast(0f)
+        val spectrum = if (waterfallShare <= 0f) {
+            maxOf(room * 0.40f, minOf(zoomGuardPx, room))
+        } else {
+            val wanted = heightPx - scalePx - planPx - heightPx * waterfallShare.coerceIn(0f, 0.9f)
+            wanted.coerceIn(minOf(zoomGuardPx, room), room)
+        }
+        return ScopeSplit(spectrum, (room - spectrum).coerceAtLeast(0f))
+    }
+
     /** Nice round ticks across the span, including both edges when they are not already a tick. */
     fun scaleTicks(span: HzSpan, maxLabels: Int = 6): List<Int> {
         val width = span.widthHz

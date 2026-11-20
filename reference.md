@@ -159,3 +159,13 @@ The emulator, connected to the simulated radio, showed six bugs. Cause and chang
 6. **Screen tab.** The framebuffer card was `weight(1)`, so an 800×480 JPEG sat in a tall black box. The card is `aspectRatio(800/480)`. The key row was one line clipped at the edge ("MSG" → "MS"); the keys wrap, and the page scrolls if they take more than the screen.
 
 `./gradlew testDebugUnitTest assembleDebug` after these fixes: **166 tests, 0 failures, 0 errors** (the previous 162, plus the waterfall window, the scale-label placement, and the idle versus keyed background cases). `assembleDebug`: BUILD SUCCESSFUL. The emulator was not available in this environment, so the six screens were not re-shot here.
+
+## Second device pass (e4ee87b)
+
+Portrait, Connect, the status-bar inset, F1–F5, the duplicate step, the waterfall, and rotation were confirmed on the emulator. Two leftovers:
+
+- **Screen tab crash.** `FlowRow` was compiled to the `FlowRowOverflow` overload, which this Compose Foundation does not contain (`NoSuchMethodError` at `ScreenMirrorScreen`). The keys are packed into plain `Row`s by width (`packKeyRows`) so `MSG` stays whole and the tab does not call `FlowRow`.
+- **Landscape zoom.** On a short scope the spectrum band was shorter than the Zoom chip, so `Zoom x1` covered the `14.150` tick. The scale now starts at or below that chip, and if the box cannot spare the height the last label is kept out of the chip's corner.
+- **Landscape waterfall.** The header was two full-width rows and PTT was another full-width bar, so the waterfall was a thin strip. Landscape now uses one 52 dp header (pills, frequency, meter) and one 44 dp row (groups, F1–F5, PTT, mic). The scope takes the rest, and `scopeSplit` gives the waterfall about 73% of that pane. Portrait is unchanged.
+
+`./gradlew testDebugUnitTest assembleDebug` after the Screen-tab and landscape rework: **168 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.

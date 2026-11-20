@@ -16,10 +16,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -57,7 +56,6 @@ private val fallbackKeys = listOf(
     "BAND_UP", "BAND_DOWN", "AM", "CW", "SSB", "MSG", "FST",
 )
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScreenMirrorScreen(viewModel: RadioViewModel) {
     val frame by viewModel.screen.collectAsState()
@@ -140,26 +138,30 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
             KnobPair("VOL", Modifier.weight(1f)) { viewModel.turnKnob("vol", it) }
             KnobPair("MFK", Modifier.weight(1f)) { viewModel.turnKnob("mfk", it) }
         }
-        // A single scrolling row cut "MSG" to "MS" at the screen edge. Wrapping keeps every
-        // label whole; the column above scrolls if the wrap takes more than one line.
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            keys.forEach { name ->
-                Text(
-                    name,
-                    color = RfGuru.text,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier
-                        .background(RfGuru.button, RoundedCornerShape(8.dp))
-                        .pointerInput(name) { keyGesture(viewModel, name) }
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                )
+        // FlowRow's overflow overload is not in this Compose Foundation, and calling it
+        // crashed the tab. Rows packed to the width keep every name, including MSG, whole.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // Captured here: inside the Column the BoxWithConstraints receiver is gone.
+            val rowWidth = maxWidth.value
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                RadioFace.packKeyRows(keys, rowWidth).forEach { line ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        line.forEach { name ->
+                            Text(
+                                name,
+                                color = RfGuru.text,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier
+                                    .background(RfGuru.button, RoundedCornerShape(8.dp))
+                                    .pointerInput(name) { keyGesture(viewModel, name) }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
     }
