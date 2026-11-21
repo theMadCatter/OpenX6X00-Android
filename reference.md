@@ -329,6 +329,10 @@ Landscape spectrum-only left a bright lawn on the bottom and a dark void above i
 
 `theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
 
+## Frequency digit mark
+
+Tapping a digit only swapped the gold glyph for the body colour. On the sunlight face both are black, so the chosen place disappeared, and at night the two colours are close. The chosen digit now sits on a gold chip with the bar colour for the glyph, and a 3 dp bar under that glyph only. The bar width is 0.62 em, the same advance the readout fitter uses, so it cannot take the row the way `fillMaxWidth` did. The selection is not cleared by a drag or a volume-key step. The line budget gives up 4 dp so the mark fits the header.
+
 ## QRZ limited flag
 
 `QrzParse.limited` was true for any error, including the local "username and password are not set" result that has no callsign. The Log screen then added "QRZ did not include the full record" under the real error. `limited` is now true only when a callsign arrived with a blank name, grid, and QTH. A subscription reply that has the call and nothing else is still limited. `missingCredentialsIsTheErrorNotALimitedRecord` covers the empty-credentials path.

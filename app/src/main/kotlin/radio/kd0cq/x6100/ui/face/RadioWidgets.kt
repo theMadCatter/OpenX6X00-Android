@@ -435,7 +435,10 @@ fun FrequencyReadout(
         // when the slot is narrow.
         val lineBudget = if (large) 40f else 28f
         val heightDp = if (maxHeight.value.isFinite()) minOf(maxHeight.value, lineBudget) else lineBudget
-        val fitted = RadioFace.frequencyTextSp(maxWidth.value, heightDp, readout)
+        // The underline is reserved under every digit, selected or not, so picking a place
+        // does not shove the row down. The text is fitted to what remains of the line.
+        val markDp = 4f
+        val fitted = RadioFace.frequencyTextSp(maxWidth.value, (heightDp - markDp).coerceAtLeast(12f), readout)
         // A caller size is a ceiling, never a size the slot cannot hold. That ceiling is how
         // a fixed 20 sp used to be fine, and a larger fixed size is how ".100.000" was lost.
         val size = (textSize?.value?.let { minOf(it, fitted) } ?: fitted).coerceAtLeast(12f).sp
@@ -469,17 +472,26 @@ fun FrequencyReadout(
         ) {
             var index = 0
             listOf(parts.first, parts.second, parts.third).forEachIndexed { groupIndex, part ->
-                if (groupIndex > 0) Text(".", color = RfGuru.gold, style = digits)
+                if (groupIndex > 0) {
+                    // The spacer matches the underline under a digit, so the dot stays on the
+                    // same line as the glyphs instead of dropping to the middle of the mark.
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(".", color = RfGuru.gold, style = digits, maxLines = 1, softWrap = false)
+                        Box(Modifier.padding(top = 1.dp).height(3.dp))
+                    }
+                }
                 part.forEach { ch ->
                     val digitIndex = index
                     index += 1
                     val on = digitIndex == selected
-                    Text(
-                        text = ch.toString(),
-                        color = if (on) RfGuru.text else RfGuru.gold,
-                        style = digits,
-                        maxLines = 1,
-                        softWrap = false,
+                    // The mark is this digit only. Swapping gold for the body colour was
+                    // invisible on the sunlight face, where both are black. The chip uses the
+                    // gold role as its fill and the bar colour as its glyph, which is dark on
+                    // gold at night and light on black in sunlight. The bar is this glyph's
+                    // width, not fillMaxWidth: that call once ate the rest of the frequency.
+                    // selected is left set, so a drag or a volume key keeps stepping this place.
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .then(
                                 if (on) {
@@ -503,8 +515,25 @@ fun FrequencyReadout(
                                     onGroup(FreqGroup.entries[groupIndex])
                                 },
                                 onLongClick = { keypad = true },
-                            ),
-                    )
+                            )
+                            .semantics { contentDescription = if (on) "$ch selected" else ch.toString() },
+                    ) {
+                        Text(
+                            text = ch.toString(),
+                            color = if (on) RfGuru.barBottom else RfGuru.gold,
+                            style = digits,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.background(if (on) RfGuru.gold else Color.Transparent),
+                        )
+                        Box(
+                            Modifier
+                                .padding(top = 1.dp)
+                                .height(3.dp)
+                                .width((digits.fontSize.value * 0.62f).dp)
+                                .background(if (on) RfGuru.gold else Color.Transparent),
+                        )
+                    }
                 }
             }
             Column(Modifier.padding(start = 4.dp)) {
