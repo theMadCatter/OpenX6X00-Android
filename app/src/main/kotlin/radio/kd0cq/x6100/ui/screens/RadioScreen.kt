@@ -21,7 +21,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -52,6 +52,7 @@ import radio.kd0cq.x6100.net.PanelCommands
 import radio.kd0cq.x6100.net.PanelMode
 import radio.kd0cq.x6100.net.PanelSettings
 import radio.kd0cq.x6100.net.RadioState
+import radio.kd0cq.x6100.ui.LocalWideWindow
 import radio.kd0cq.x6100.ui.RadioViewModel
 import radio.kd0cq.x6100.ui.face.CompactSlider
 import radio.kd0cq.x6100.ui.face.FaceCommand
@@ -122,8 +123,11 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(RfGuru.bg)) {
-        val landscape = maxWidth > maxHeight
+    // The shell measured the window and published it. Measuring this pane again disagreed
+    // while a rotation was still changing the size: the landscape deck was squeezed under
+    // the band plan, and the portrait bottom bar and PTT were not composed yet.
+    val landscape = LocalWideWindow.current
+    Box(Modifier.fillMaxSize().background(RfGuru.bg)) {
         if (landscape) {
             // Phone landscape is only ~360–412 dp tall. PTT sits beside the keys, and the
             // header is one band, so the scope can keep most of that height for the waterfall.

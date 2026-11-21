@@ -265,6 +265,15 @@ object RadioFace {
      * stays inside the slot. The height of the slot caps the size; a wide slot still grows
      * past the old 20 sp gold text.
      */
+    /**
+     * True when the window itself is wider than it is tall. The navigation chrome and the
+     * operating face both use this, so a rotation cannot show one of them in the other
+     * orientation. A zero or unfinished size is not wide: the portrait face is the one that
+     * keeps the keys, the bottom bar and PTT on a tall phone.
+     */
+    fun wideWindow(widthDp: Float, heightDp: Float): Boolean =
+        widthDp.isFinite() && heightDp.isFinite() && widthDp > 0f && heightDp > 0f && widthDp > heightDp
+
     fun frequencyTextSp(widthDp: Float, heightDp: Float, text: String): Float {
         val advance = 0.62f
         val chars = text.length.coerceAtLeast(1) + 1.5f
