@@ -115,11 +115,11 @@ object SpectrumRidge {
     const val MAX_DEPTH = 128
 
     /**
-     * Samples across one ridge. A 1024-bin FFT with only a few dozen columns
-     * skips a one-bin carrier. Each column still peak-holds the bins it covers,
-     * and 256 columns keep that carrier a narrow ridge.
+     * Columns across one ridge. Half the FFT, so a full-span column is two bins
+     * and the floor reads as fine blades. Each column still peak-holds the bins
+     * it covers, which is what keeps a one-bin carrier from falling in a gap.
      */
-    const val SAMPLES = 256
+    const val SAMPLES = 512
 
     /** Slot size. The panel sends WATERFALL_NFFT, which is 1024. */
     const val BINS = 1024
@@ -156,15 +156,20 @@ object SpectrumRidge {
 
     /**
      * Height of the top of that noise, as a fraction of a full-scale peak.
-     * Small on purpose: the quiet band is a wiggle on the line, not a carpet.
+     * Small on purpose. 0.10 still drew the quiet band as big waves; 0.08 is
+     * a fine wiggle on the stroke.
      */
-    const val GRASS_HEIGHT = 0.10f
+    const val GRASS_HEIGHT = 0.08f
+
+    /** The front row plus the three behind it. Noise is the mean of those. */
+    const val TEMPORAL_FRAMES = 4
 
     /**
      * Ages are not spaced evenly. Below 1, the first rows take more of the
-     * pane and the last rows squeeze together. 1 would be a ruler.
+     * pane and the last rows squeeze together. 0.80 is a little tighter at the
+     * front than 0.70, so the comb reads as a lawn, and the back is still closer.
      */
-    const val DEPTH_CURVE = 0.70f
+    const val DEPTH_CURVE = 0.80f
 
     /** Veil opacity, 0xE6 is 90%. Near enough to opaque that a nearer row hides the one behind it. */
     const val VEIL_ALPHA = 0xE6
@@ -305,8 +310,10 @@ object SpectrumRidge {
     }
 
     /**
-     * Smooth the grass only. A column above [keepAbove] is a signal and is copied
-     * unchanged, including its neighbours' average, so the ridge stays one column wide.
+     * A light 3-tap on the grass only. A sample above [keepAbove] is a signal
+     * and is copied, and it is left out of its neighbours' average, so a carrier
+     * stays one bin wide. The centre keeps most of its own value: this pass takes
+     * the sharpest spikes off the noise, and the temporal mean does the calming.
      */
     fun smoothSpatial(src: FloatArray, dst: FloatArray, count: Int, keepAbove: Float = GRASS_HEIGHT) {
         if (count <= 0) return
@@ -314,7 +321,7 @@ object SpectrumRidge {
             dst[0] = src[0]
             return
         }
-        dst[0] = if (src[0] > keepAbove) src[0] else src[0] * 0.72f + (if (src[1] <= keepAbove) src[1] else src[0]) * 0.28f
+        dst[0] = if (src[0] > keepAbove) src[0] else src[0] * 0.82f + (if (src[1] <= keepAbove) src[1] else src[0]) * 0.18f
         for (i in 1 until count - 1) {
             val cur = src[i]
             if (cur > keepAbove) {
@@ -334,18 +341,121 @@ object SpectrumRidge {
                 weight += 1f
             }
             val avg = sum / weight
-            dst[i] = cur * 0.45f + avg * 0.55f
+            dst[i] = cur * 0.70f + avg * 0.30f
         }
         val last = count - 1
-        dst[last] = if (src[last] > keepAbove) src[last] else src[last] * 0.72f + (if (src[last - 1] <= keepAbove) src[last - 1] else src[last]) * 0.28f
+        dst[last] = if (src[last] > keepAbove) src[last] else src[last] * 0.82f + (if (src[last - 1] <= keepAbove) src[last - 1] else src[last]) * 0.18f
     }
 
     /**
-     * A light blend of two grass samples. A signal, new or still there, is not
-     * pulled toward the other row: that blend was rounding carriers off.
+     * Noise is the mean of this sample and up to three older ones. A signal is
+     * returned as itself, and an older signal is left out of the mean, so a
+     * carrier is not rounded down into the floor it just left.
+     *
+     * [older] is newest first. [count] is how many of those to use.
      */
-    fun smoothTemporal(current: Float, older: Float, keepAbove: Float = GRASS_HEIGHT): Float =
-        if (current > keepAbove || older > keepAbove) current else current * 0.74f + older * 0.26f
+    fun smoothTemporal(
+        current: Float,
+        older: FloatArray,
+        count: Int,
+        keepAbove: Float = GRASS_HEIGHT,
+    ): Float {
+        if (current > keepAbove) return current
+        var sum = current
+        var n = 1
+        val nOlder = count.coerceIn(0, older.size)
+        for (i in 0 until nOlder) {
+            val sample = older[i]
+            if (sample > keepAbove) continue
+            sum += sample
+            n++
+        }
+        return sum / n
+    }
+
+    /** One older sample. The same mean as [smoothTemporal] with a single neighbour. */
+    fun smoothTemporal(current: Float, older: Float, keepAbove: Float = GRASS_HEIGHT): Float {
+        if (current > keepAbove || older > keepAbove) return current
+        return (current + older) / 2f
+    }
+
+    /**
+     * The levels a row is drawn from, written once when the frame arrives.
+     *
+     * [db] is the raw FFT. Each bin is shaped with the floor and ceiling of this
+     * frame, then the light spatial pass, then the mean of the last few noise
+     * frames. [previous] is those frames, newest first, already baked. The result
+     * in [dst] is what scrolling must keep: later frames do not write it again,
+     * and a later floor does not move it.
+     *
+     * [raw] and [shaped] are scratch. Nothing here allocates.
+     */
+    fun bakeLevels(
+        db: ByteArray,
+        length: Int,
+        floorDb: Float,
+        ceilingDb: Float,
+        previous: Array<FloatArray?>,
+        previousCount: Int,
+        raw: FloatArray,
+        shaped: FloatArray,
+        older: FloatArray,
+        dst: FloatArray,
+    ) {
+        val n = min(length, min(db.size, min(dst.size, min(raw.size, shaped.size)))).coerceAtLeast(0)
+        if (n == 0) {
+            dst.fill(0f)
+            return
+        }
+        val span = ceilingDb - floorDb
+        for (i in 0 until n) raw[i] = shapeDb(db[i].toInt().toFloat() - floorDb, span)
+        smoothSpatial(raw, shaped, n)
+        val nOlder = previousCount.coerceIn(0, previous.size)
+        for (i in 0 until n) {
+            var kept = 0
+            for (p in 0 until nOlder) {
+                val row = previous[p] ?: continue
+                if (i >= row.size || kept >= older.size) continue
+                older[kept] = row[i]
+                kept++
+            }
+            dst[i] = smoothTemporal(shaped[i], older, kept)
+        }
+        for (i in n until dst.size) dst[i] = 0f
+    }
+
+    /**
+     * Loudest baked level in one column. The slice is the same one [columnPeakDb]
+     * uses, so a zoom still reads the frozen bins at the right frequencies.
+     */
+    fun columnLevel(
+        levels: FloatArray,
+        liveBins: Int,
+        column: Int,
+        columns: Int,
+        viewCentreHz: Int,
+        viewWidthHz: Int,
+        rowCentreHz: Int,
+        rowWidthHz: Int,
+    ): Float {
+        val n = liveBins.coerceIn(0, levels.size)
+        if (n == 0 || columns <= 0 || viewWidthHz <= 0 || rowWidthHz <= 0) return 0f
+        val hz0 = edgeHz(column, columns, viewCentreHz, viewWidthHz)
+        val hz1 = edgeHz(column + 1, columns, viewCentreHz, viewWidthHz)
+        val b0 = WaterfallDisplay.binAtHz(min(hz0, hz1), rowCentreHz, rowWidthHz, n)
+        val b1 = WaterfallDisplay.binAtHz(max(hz0, hz1), rowCentreHz, rowWidthHz, n)
+        var i0 = floor(b0).toInt()
+        var i1 = ceil(b1).toInt() - 1
+        if (i1 < i0) i1 = i0
+        i0 = i0.coerceIn(0, n - 1)
+        i1 = i1.coerceIn(0, n - 1)
+        var peak = levels[i0]
+        for (i in i0..i1) {
+            val v = levels[i]
+            if (v > peak) peak = v
+        }
+        return peak
+    }
 
     fun levelArgb(level: Float, style: RidgeStyle = RidgeStyle.AETHER): Int {
         val stops = if (style == RidgeStyle.FT710) FT_AT else AETHER_AT
@@ -405,13 +515,14 @@ object SpectrumRidge {
         return rgb
     }
 
-    private val AETHER_AT = floatArrayOf(0f, 0.16f, 0.38f, 0.58f, 0.78f, 1f)
+    private val AETHER_AT = floatArrayOf(0f, 0.12f, 0.32f, 0.55f, 0.78f, 1f)
 
     /**
-     * Teal-green on the noise, green through the middle, yellow, then orange-red
-     * on a real peak. The lime and chartreuse stops are what flooded the pane.
+     * Green on the noise (#3ccf5a through #6fe36a), yellow-green and yellow
+     * through the middle, orange-red on a real peak. The teal floor read cold
+     * next to AetherSDR. The fill under the stroke stays the dark veil.
      */
-    private val AETHER_RGB = intArrayOf(0x1A7A68, 0x1E9A58, 0x3CB04A, 0xE0C42E, 0xF08818, 0xE83014)
+    private val AETHER_RGB = intArrayOf(0x3CCF5A, 0x6FE36A, 0xC6E24A, 0xF0D428, 0xF09020, 0xE82810)
 
     private val FT_AT = floatArrayOf(0f, 0.22f, 0.48f, 0.74f, 1f)
 
@@ -508,24 +619,67 @@ class SpectrumRidgeRing(
     val bins: Int = SpectrumRidge.BINS,
 ) {
     private val db = Array(depth) { ByteArray(bins) }
+    /** Shaped levels, written once in [push]. Draw reads these and does not reshape them. */
+    private val baked = Array(depth) { FloatArray(bins) }
     private val lengths = IntArray(depth)
     private val centres = IntArray(depth)
     private val widths = IntArray(depth)
+    private val rawScratch = FloatArray(bins)
+    private val shapedScratch = FloatArray(bins)
+    private val olderScratch = FloatArray(SpectrumRidge.TEMPORAL_FRAMES - 1)
+    private val history = arrayOfNulls<FloatArray>(SpectrumRidge.TEMPORAL_FRAMES - 1)
     private var next = 0
 
     var count: Int = 0
         private set
 
-    fun push(source: ByteArray, centreHz: Int, widthHz: Int) {
-        val slot = db[next]
+    /**
+     * Copy the FFT and bake its levels with [floorDb] and [ceilingDb].
+     *
+     * The bake is the snapshot. The next push scrolls this slot back and does
+     * not touch it, so the history cannot crawl when the floor glides or the
+     * newest noise moves. Noise is the mean of this frame and up to three
+     * earlier frames on the same span. A different span is not mixed in,
+     * because the bins would no longer be the same frequencies.
+     */
+    fun push(source: ByteArray, centreHz: Int, widthHz: Int, floorDb: Float = -120f, ceilingDb: Float = -108f) {
+        val slotIndex = next
+        val slot = db[slotIndex]
         val n = source.size.coerceAtMost(slot.size)
         if (n > 0) source.copyInto(slot, endIndex = n)
-        lengths[next] = n
-        centres[next] = centreHz
-        widths[next] = widthHz
+        var historyCount = 0
+        if (count > 0) {
+            var age = 0
+            while (historyCount < history.size && age < count) {
+                val s = slot(age)
+                if (s == slotIndex) break
+                if (lengths[s] != n || centres[s] != centreHz || widths[s] != widthHz) break
+                history[historyCount] = baked[s]
+                historyCount++
+                age++
+            }
+        }
+        SpectrumRidge.bakeLevels(
+            db = slot,
+            length = n,
+            floorDb = floorDb,
+            ceilingDb = ceilingDb,
+            previous = history,
+            previousCount = historyCount,
+            raw = rawScratch,
+            shaped = shapedScratch,
+            older = olderScratch,
+            dst = baked[slotIndex],
+        )
+        lengths[slotIndex] = n
+        centres[slotIndex] = centreHz
+        widths[slotIndex] = widthHz
         next = (next + 1) % depth
         if (count < depth) count++
     }
+
+    /** Levels baked for [age]. The caller must not write this array. */
+    fun bakedAt(age: Int): FloatArray = baked[slot(age)]
 
     /** [age] 0 is the frame just pushed. Ages at or past [count] are not a frame. */
     fun lengthAt(age: Int): Int = lengths[slot(age)]
@@ -545,13 +699,11 @@ class SpectrumRidgeRing(
 /**
  * Reused sample buffers for one ridge. Created once with the pane.
  *
- * [level] is the shaped level that gets drawn. [shaped] is the spatial pass.
- * [older] is the previous row's spatial pass, for the temporal blend.
+ * [level] is copied from the row's frozen bake. The draw does not smooth it
+ * again: doing that on every frame is what made the history crawl.
  */
 class RidgeScratch(samples: Int = SpectrumRidge.SAMPLES) {
     val x = FloatArray(samples)
     val y = FloatArray(samples)
     val level = FloatArray(samples)
-    val shaped = FloatArray(samples)
-    val older = FloatArray(samples)
 }

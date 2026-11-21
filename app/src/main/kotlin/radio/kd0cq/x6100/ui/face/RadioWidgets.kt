@@ -512,9 +512,16 @@ fun SpectrumStack(
         if (!drawScope) return@LaunchedEffect
         val current = frame ?: return@LaunchedEffect
         history.push(current.db, current.centreHz, current.widthHz)
-        // Same frames the waterfall keeps. The ring copies into slots it already owns.
-        ridgeRing.push(current.db, current.centreHz, current.widthHz)
+        // The range includes this frame, then the ring bakes the levels with it.
+        // Later draws read that bake. They do not reshape the row when the floor moves.
         ridgeRange.update(current.db, current.bins)
+        ridgeRing.push(
+            current.db,
+            current.centreHz,
+            current.widthHz,
+            ridgeRange.floorDb,
+            ridgeRange.ceilingDb,
+        )
         tick++
     }
     val rows = remember(tick) { history.snapshot() }
@@ -649,8 +656,6 @@ fun SpectrumStack(
                     style = ridgeStyle,
                     specH = specH,
                     viewWidth = size.width,
-                    floor = ridgeRange.floorDb,
-                    ceiling = ridgeRange.ceilingDb,
                     viewCentreHz = spectrumFrame.centreHz,
                     viewWidthHz = spectrumFrame.widthHz,
                 )
@@ -872,9 +877,9 @@ fun SpectrumStack(
  * A comb of ridge lines, oldest first.
  *
  * Each row is a dark veil from its baseline up to the trace, then a thin stroke
- * coloured by level. The veil is what hides the lines behind a nearer row. The
- * stroke is what you read: teal-green noise, yellow and red where a carrier stands.
- * Sixty-four rows, spaced wider at the front. The paths are the ones the pane allocated.
+ * coloured by level. The veil hides the lines behind a nearer row. The stroke is
+ * the picture: green noise, yellow, then orange-red where a carrier stands.
+ * The levels were baked when the frame arrived. This pass only places them.
  */
 private fun DrawScope.drawRidgePlot(
     ring: SpectrumRidgeRing,
@@ -884,13 +889,10 @@ private fun DrawScope.drawRidgePlot(
     style: RidgeStyle,
     specH: Float,
     viewWidth: Float,
-    floor: Float,
-    ceiling: Float,
     viewCentreHz: Int,
     viewWidthHz: Int,
 ) {
     if (specH < 2f || viewWidth < 2f || ring.count <= 0 || viewWidthHz <= 0) return
-    val span = ceiling - floor
     val samples = scratch.x.size
     // Always the same sixty-four. A taller pane opens the gaps; it does not add lines
     // until they fuse into a sheet.
@@ -899,42 +901,22 @@ private fun DrawScope.drawRidgePlot(
     val shown = minOf(ring.count, depth)
     val strokePx = 1.25.dp.toPx()
     val veilColor = packedArgb(SpectrumRidge.veilArgb(style))
-    var haveOlder = false
-    var olderCentre = 0
-    var olderWidth = 0
     // Oldest first. A nearer veil then covers the lines that sit behind its stroke.
     for (age in shown - 1 downTo 0) {
-        val row = ring.dbAt(age)
         val rowBins = ring.lengthAt(age)
         val rowCentre = ring.centreAt(age)
         val rowWidth = ring.widthAt(age)
         if (rowBins <= 0 || rowWidth <= 0) continue
+        // Frozen levels. Re-shaping here, or blending with the row behind, is what
+        // made every ridge crawl when the next frame arrived.
+        val baked = ring.bakedAt(age)
         for (i in 0 until samples) {
-            // The loudest bin in the column, not the bin at its centre. A carrier
-            // one bin wide used to fall between the 96 sample points and vanish.
-            val db = SpectrumRidge.columnPeakDb(
-                row, rowBins, i, samples, viewCentreHz, viewWidthHz, rowCentre, rowWidth,
+            scratch.level[i] = SpectrumRidge.columnLevel(
+                baked, rowBins, i, samples, viewCentreHz, viewWidthHz, rowCentre, rowWidth,
             )
-            val above = if (db == Float.NEGATIVE_INFINITY) 0f else db - floor
-            scratch.level[i] = SpectrumRidge.shapeDb(above, span)
-        }
-        SpectrumRidge.smoothSpatial(scratch.level, scratch.shaped, samples)
-        val sameSpan = haveOlder && olderCentre == rowCentre && olderWidth == rowWidth
-        if (sameSpan) {
-            for (i in 0 until samples) {
-                scratch.level[i] = SpectrumRidge.smoothTemporal(scratch.shaped[i], scratch.older[i])
-            }
-        } else {
-            for (i in 0 until samples) scratch.level[i] = scratch.shaped[i]
-        }
-        for (i in 0 until samples) {
-            scratch.older[i] = scratch.shaped[i]
             scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth)
             scratch.y[i] = SpectrumRidge.projectY(age, depth, scratch.level[i], specH, amplitude = amplitude)
         }
-        haveOlder = true
-        olderCentre = rowCentre
-        olderWidth = rowWidth
         val baseline = SpectrumRidge.projectY(age, depth, 0f, specH)
         veil.rewind()
         veil.moveTo(scratch.x[0], baseline)

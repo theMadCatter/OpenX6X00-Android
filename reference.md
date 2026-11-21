@@ -294,3 +294,18 @@ What changed, 3D drawing only. PTT, the lease, `PanelEventBus`, background mode,
 - The canvas paints a short black fade under the top chips. It is inside the canvas, so drag and pinch still hit the plot.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **198 tests, 0 failures, 0 errors**. `theFloorSitsLowInThePane` requires the top of the noise, at the default, to stay at or under 15% of the pane. `aTallPaneKeepsSixtyFourRowsAndOpensTheFrontGaps` replaces the test that asked a tall pane for more than 64 rows. No emulator here, so this comb was not re-shot.
+
+## Calmer 3D comb, after the 976ab5d emulator check
+
+The emulator of `976ab5d` showed the right structure: a dark floor, separate strokes, and a tall carrier. Two things were still wrong. The strokes were wavy and teal, and about 39% of the pane changed between frames 0.4 s apart, against about 10% on the earlier surface.
+
+The cause of the boil is that every draw rebuilt every row. `drawRidgePlot` read the raw bins, shaped them with the floor of that moment, ran the spatial pass, and blended each row with the row behind it. The floor glides, and the neighbour changes when a row scrolls, so a row that had already left the front was a different shape on the next frame. The history crawled.
+
+What changed, 3D only. PTT, the lease, `PanelEventBus`, background mode, the layout preference, the carrier test, and the floor-height ceiling are the same.
+
+- `push` bakes the levels once: shape with the floor and ceiling of that frame, a light 3-tap on the noise, then the mean of this frame and up to three earlier noise frames on the same span. A bin more than 6 dB above the floor is copied, so a carrier is immediate. Draw only places those levels. The next push does not write the slot again.
+- The noise top is 8% of a full-scale peak, down from 10%. Columns are 512, so a full-span column is two bins and the floor is fine blades.
+- Aether strokes start at `#3ccf5a`, rise through `#6fe36a` and yellow, and peak orange-red. The FT style is still cyan to white.
+- `DEPTH_CURVE` is 0.80, so the front gaps are a little tighter and the back is still closer.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **199 tests, 0 failures, 0 errors**. `aRowIsFrozenOnceItLeavesTheFront` keeps a copy of the front row and requires the same samples two frames later, including after the floor has moved. No emulator here, so this pass was not re-shot.

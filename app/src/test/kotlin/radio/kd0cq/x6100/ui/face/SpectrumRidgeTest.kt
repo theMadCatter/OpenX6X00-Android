@@ -72,17 +72,18 @@ class SpectrumRidgeTest {
     }
 
     @Test
-    fun colourRunsFromTealNoiseToARedPeak() {
+    fun colourRunsFromGreenNoiseToARedPeak() {
         val floor = SpectrumRidge.levelArgb(0f)
+        val grass = SpectrumRidge.levelArgb(0.12f)
         val mid = SpectrumRidge.levelArgb(0.40f)
-        val high = SpectrumRidge.levelArgb(0.70f)
         val peak = SpectrumRidge.levelArgb(1f)
-        // Noise is teal-green, not the lime that flooded the pane. Yellow is for the high part.
-        assertTrue(green(floor) > red(floor))
-        assertTrue(green(floor) in 80..170)
-        assertTrue(blue(floor) > 60)
-        assertTrue(green(mid) >= green(floor) - 20)
-        assertTrue(red(high) > 180 && green(high) > 80)
+        // Floor strokes are green (#3ccf5a). Teal was the cold cast against AetherSDR.
+        assertTrue(green(floor) > red(floor) + 80)
+        assertTrue(green(floor) > blue(floor) + 80)
+        assertTrue(green(floor) > 180)
+        assertTrue(green(grass) > 200 && red(grass) > 80)
+        // The middle is yellow-green into yellow, then the peak is orange-red.
+        assertTrue(red(mid) > 150 && green(mid) > 180)
         assertTrue(red(peak) > 200)
         assertTrue(green(peak) < 80)
         assertEquals(0, SpectrumRidge.colorStep(0f))
@@ -116,7 +117,7 @@ class SpectrumRidgeTest {
         // A few dB of noise is a visible change in height, not squared into a sheet.
         val low = SpectrumRidge.shapeDb(1f, span)
         val mid = SpectrumRidge.shapeDb(4f, span)
-        assertTrue(mid > low + 0.04f)
+        assertTrue(mid > low + 0.03f)
         assertTrue(mid < SpectrumRidge.GRASS_HEIGHT)
         // Past the grass, the level is on its way to the top of the scale.
         assertTrue(SpectrumRidge.shapeDb(span, span) > 0.95f)
@@ -145,7 +146,12 @@ class SpectrumRidgeTest {
         // A carrier is not blended down into the previous quiet row.
         assertEquals(0.80f, SpectrumRidge.smoothTemporal(0.8f, 0.05f), 0.001f)
         val blended = SpectrumRidge.smoothTemporal(0.05f, 0.01f)
-        assertTrue(blended > 0.02f && blended < 0.05f)
+        assertEquals(0.03f, blended, 0.001f)
+        // Noise is the mean of this frame and the three behind it. A carrier in
+        // that history is left out, so the floor is not pulled up to the peak.
+        val older = floatArrayOf(0.90f, 0.02f, 0.02f)
+        assertEquals((0.04f + 0.02f + 0.02f) / 3f, SpectrumRidge.smoothTemporal(0.04f, older, 3), 0.001f)
+        assertEquals(0.20f, SpectrumRidge.smoothTemporal(0.20f, older, 3), 0.001f)
     }
 
     @Test
@@ -238,6 +244,37 @@ class SpectrumRidgeTest {
         val fraction = (height - y) / height
         assertTrue(fraction <= 0.15f)
         assertTrue(fraction >= 0.04f)
+    }
+
+    @Test
+    fun aRowIsFrozenOnceItLeavesTheFront() {
+        // The boil was every row being rebuilt from the raw bins on the next frame.
+        // The snapshot taken at the front has to be the samples still drawn behind it.
+        val ring = SpectrumRidgeRing(depth = 6, bins = 16)
+        val centre = 14_100_000
+        val width = 48_000
+        val floor = -110f
+        val ceiling = floor + 40f
+        val first = ByteArray(16) { -108 }
+        first[8] = -90
+        ring.push(first, centre, width, floor, ceiling)
+        val frozen = ring.bakedAt(0).copyOf()
+        val signal = SpectrumRidge.shapeDb(-90f - floor, ceiling - floor)
+        assertEquals(signal, frozen[8], 0.001f)
+        assertTrue(signal > SpectrumRidge.GRASS_HEIGHT)
+        val second = ByteArray(16) { -104 }
+        second[8] = -80
+        ring.push(second, centre, width, floor, ceiling)
+        for (i in frozen.indices) assertEquals(frozen[i], ring.bakedAt(1)[i], 0.0001f)
+        val louder = SpectrumRidge.shapeDb(-80f - floor, ceiling - floor)
+        assertEquals(louder, ring.bakedAt(0)[8], 0.001f)
+        val rawNoise = SpectrumRidge.shapeDb(-104f - floor, ceiling - floor)
+        assertTrue(ring.bakedAt(0)[0] < rawNoise)
+        assertTrue(ring.bakedAt(0)[0] > frozen[0])
+        // A later frame, and a floor that has moved, still leave the snapshot alone.
+        ring.push(ByteArray(16) { -100 }, centre, width, floor - 20f, ceiling)
+        for (i in frozen.indices) assertEquals(frozen[i], ring.bakedAt(2)[i], 0.0001f)
+        assertTrue(SpectrumRidge.SAMPLES in 384..512)
     }
 
     @Test
