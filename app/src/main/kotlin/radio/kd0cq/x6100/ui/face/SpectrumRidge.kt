@@ -143,6 +143,12 @@ object SpectrumRidge {
     /** How far the oldest baseline rises. Near 1, so that edge sits at the top of the pane. */
     const val RISE = 0.92f
 
+    /**
+     * Aether horizon, as a fraction of the pane. High on a short strip and on a
+     * tall spectrum-only pane, so the field is not a lawn under a black void.
+     */
+    const val GRASS_RISE = 0.96f
+
     /** How far a full-scale peak on the front ridge rises, as a fraction of the height. */
     const val AMPLITUDE = 0.90f
 
@@ -157,6 +163,13 @@ object SpectrumRidge {
      * colour. The back row is about a third, so the comb reads as depth.
      */
     const val FOG = 0.65f
+
+    /**
+     * How much the oldest Aether row fades. The comb uses [FOG]. A stronger fade
+     * here turned the top of a tall pane into empty black; the field has to
+     * stay green up to the horizon.
+     */
+    const val GRASS_FOG = 0.22f
 
     /**
      * dB above the eased floor that is still noise. A signal past this is left
@@ -234,6 +247,51 @@ object SpectrumRidge {
      * Extra height raises it a little, capped, so a full-scope peak is taller in pixels
      * than a stretched copy of the short plot and still leaves sky above the crest.
      */
+    /**
+     * Horizon for the grass field. Wide, square, and tall panes all keep it
+     * near the top. The fraction does not shrink as the pane grows, which is
+     * what left a spectrum-only landscape with a lawn and a void above it.
+     */
+    fun riseFor(width: Float, height: Float): Float {
+        if (width <= 0f || height <= 0f) return GRASS_RISE
+        return GRASS_RISE
+    }
+
+    /**
+     * How much of [height] the grass baselines cover, front floor to the
+     * horizon. The same fraction for a wide landscape pane and a tall portrait one.
+     */
+    fun fieldSpanFraction(width: Float, height: Float): Float {
+        if (height <= 0f) return 0f
+        val back = projectY(
+            age = GRASS_ROWS - 1,
+            depth = GRASS_ROWS,
+            level = 0f,
+            height = height,
+            rise = riseFor(width, height),
+            curve = GRASS_CURVE,
+        )
+        return ((height - back) / height).coerceIn(0f, 1f)
+    }
+
+    /**
+     * Front-row full-scale peak, as a fraction of the pane. It tracks
+     * [amplitudeFor], so a taller pane does not grow a different shaped carrier.
+     */
+    fun carrierFraction(width: Float, height: Float): Float {
+        if (height <= 0f) return 0f
+        val y = projectY(
+            age = 0,
+            depth = GRASS_ROWS,
+            level = 1f,
+            height = height,
+            rise = riseFor(width, height),
+            amplitude = amplitudeFor(height),
+            curve = GRASS_CURVE,
+        )
+        return ((height - y) / height).coerceIn(0f, 1f)
+    }
+
     fun amplitudeFor(spectrumPx: Float): Float {
         val reference = 140f
         if (spectrumPx <= reference) return AMPLITUDE
@@ -504,9 +562,9 @@ object SpectrumRidge {
         levelArgb(step.coerceIn(0, COLOR_STEPS - 1) / (COLOR_STEPS - 1).toFloat(), style)
 
     /** Farther strokes are dimmer. The front row is unchanged. The oldest keeps about a third. */
-    fun fogArgb(argb: Int, age: Int, depth: Int, curve: Float = DEPTH_CURVE): Int {
+    fun fogArgb(argb: Int, age: Int, depth: Int, curve: Float = DEPTH_CURVE, fog: Float = FOG): Int {
         if (depth <= 1) return argb
-        return scaleRgb(argb, 1f - FOG * depthT(age, depth, curve))
+        return scaleRgb(argb, 1f - fog * depthT(age, depth, curve))
     }
 
     /**
@@ -521,7 +579,7 @@ object SpectrumRidge {
      * the same way the blade tips dim. The FT comb does not use this.
      */
     fun grassFillArgb(age: Int = 0, depth: Int = GRASS_ROWS): Int {
-        val fogged = fogArgb(0xFF2E9A40.toInt(), age, depth, GRASS_CURVE) and 0x00FFFFFF
+        val fogged = fogArgb(0xFF2E9A40.toInt(), age, depth, GRASS_CURVE, GRASS_FOG) and 0x00FFFFFF
         return (GRASS_FILL_ALPHA shl 24) or fogged
     }
 

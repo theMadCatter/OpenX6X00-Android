@@ -247,6 +247,23 @@ class SpectrumRidgeTest {
     }
 
     @Test
+    fun theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional() {
+        // Landscape spectrum-only is a wide tall pane. Portrait is narrow and tall.
+        // The S+W strip is wide and short. The horizon stays near the top of each,
+        // and the carrier's fraction of the pane does not jump between them.
+        val panes = listOf(900f to 520f, 360f to 140f, 400f to 780f, 640f to 640f)
+        val peaks = ArrayList<Float>(panes.size)
+        for ((width, height) in panes) {
+            val span = SpectrumRidge.fieldSpanFraction(width, height)
+            assertTrue("field $width x $height covers $span", span >= 0.90f)
+            val peak = SpectrumRidge.carrierFraction(width, height)
+            assertTrue("carrier $width x $height is $peak", peak in 0.58f..1f)
+            peaks += peak
+        }
+        assertTrue(peaks.max() - peaks.min() <= 0.12f)
+    }
+
+    @Test
     fun aetherGrassIsADenseFieldOfBlades() {
         val depth = SpectrumRidge.GRASS_ROWS
         assertTrue(depth > SpectrumRidge.DEPTH)
