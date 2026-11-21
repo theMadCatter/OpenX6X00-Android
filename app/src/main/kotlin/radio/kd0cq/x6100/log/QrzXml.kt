@@ -4,8 +4,9 @@
 //
 // The QRZ XML API (https://xmldata.qrz.com/xml/current/). The password travels only as
 // the query parameter that API requires. Nothing in this file writes it to a log.
-// A session error, or a callsign with no name and no grid, is a limited record: the
-// screen shows the fields that arrived and says the rest needs a subscription.
+// A callsign with no name, grid, or QTH is a limited record: the screen shows the
+// fields that arrived and says the rest needs a subscription. An error with no
+// callsign is only that error.
 
 package radio.kd0cq.x6100.log
 
@@ -30,8 +31,13 @@ data class QrzParse(
     val subscribed: Boolean,
     val call: QrzCall?,
 ) {
-    /** True when QRZ gave a session error, or a call with none of the paid fields. */
-    val limited: Boolean get() = error != null || (call != null && call.name.isBlank() && call.grid.isBlank() && call.qth.isBlank())
+    /**
+     * True when a callsign came back with none of the paid fields. An error on
+     * its own (missing credentials, a dead session, no answer) is not a partial
+     * record, so the screen shows that sentence only.
+     */
+    val limited: Boolean
+        get() = call != null && call.name.isBlank() && call.grid.isBlank() && call.qth.isBlank()
 }
 
 object QrzApi {

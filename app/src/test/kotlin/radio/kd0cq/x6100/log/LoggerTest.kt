@@ -62,6 +62,14 @@ class LoggerTest {
     }
 
     @Test
+    fun missingCredentialsIsTheErrorNotALimitedRecord() {
+        val result = QrzLookup { error("should not fetch") }.lookup("", "", "KD0CQ")
+        assertEquals("QRZ username and password are not set", result.error)
+        assertNull(result.call)
+        assertFalse(result.limited)
+    }
+
+    @Test
     fun sessionUrlCarriesThePasswordAndIsNotStoredInTheParse() {
         val url = QrzApi.sessionUrl("op", "s3cret")
         assertTrue(url.startsWith(QrzApi.ENDPOINT))
