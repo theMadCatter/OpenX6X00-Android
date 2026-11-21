@@ -346,7 +346,6 @@ private fun LandscapeHeader(
                         if (canOperate) viewModel.setFrequency(RadioFace.bumpFrequency(freq, freqGroup, dir))
                     },
                     large = false,
-                    textSize = 20.sp,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
@@ -393,14 +392,14 @@ private fun LandscapeDeck(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // Groups scroll, so they can be the narrower part. The five keys need the width:
-            // at 40 dp, "TX power" was cut to "TX pow…" and the value sat on the bottom edge.
-            GroupStrip(page.group, onGroup, Modifier.weight(0.72f))
+            // All six group names share this slot equally. A narrower scrolling strip clipped
+            // DFL and hid MEM. The keys keep the larger share so "TX pwr" and its value fit.
+            GroupStrip(page.group, onGroup, Modifier.weight(1.15f), distribute = true)
             SoftkeyBar(
                 page,
                 state,
                 onKey,
-                Modifier.weight(1.6f),
+                Modifier.weight(1.55f),
                 barHeight = 52.dp,
                 compact = true,
             )
@@ -409,11 +408,12 @@ private fun LandscapeDeck(
                 mayKey = mayKey,
                 onPress = { viewModel.pressPtt() },
                 onRelease = { viewModel.releasePtt() },
-                modifier = Modifier.width(88.dp).height(52.dp),
+                modifier = Modifier.width(72.dp).height(52.dp),
             )
             MicSwitch(
                 checked = viewModel.transmitAudioFromPhone,
                 enabled = canOperate && !keyed,
+                compact = true,
                 onChecked = { want ->
                     if (want && !viewModel.hasMicrophonePermission()) {
                         askMicrophone.launch(Manifest.permission.RECORD_AUDIO)

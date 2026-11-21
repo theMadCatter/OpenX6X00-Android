@@ -189,4 +189,21 @@ class WaterfallDisplayTest {
         assertEquals("RF", RadioFace.compactKeyTitle("RF gain"))
         assertEquals("Modes", RadioFace.compactKeyTitle("Modes"))
     }
+
+    @Test
+    fun shortHistoryFillsThePaneAndAFullHistoryIsOneRowPerPixel() {
+        // A 1:1 map left the bottom of a tall pane at the darkest stop until a row existed for
+        // every pixel. Stretching the rows that have arrived covers every y, and a history as
+        // tall as the pane goes back to one row per pixel.
+        assertEquals(0, WaterfallDisplay.historyRowAt(0, 10, 10))
+        assertEquals(9, WaterfallDisplay.historyRowAt(9, 10, 10))
+        assertEquals(0, WaterfallDisplay.historyRowAt(0, 10, 2))
+        assertEquals(1, WaterfallDisplay.historyRowAt(5, 10, 2))
+        assertEquals(1, WaterfallDisplay.historyRowAt(9, 10, 2))
+        val covered = (0 until 10).map { WaterfallDisplay.historyRowAt(it, 10, 2) }.toSet()
+        assertEquals(setOf(0, 1), covered)
+        assertEquals(9, WaterfallDisplay.historyRowAt(9, 10, 20))
+        assertEquals(0, WaterfallDisplay.historyRowAt(0, 0, 4))
+        assertEquals(0, WaterfallDisplay.historyRowAt(3, 10, 0))
+    }
 }

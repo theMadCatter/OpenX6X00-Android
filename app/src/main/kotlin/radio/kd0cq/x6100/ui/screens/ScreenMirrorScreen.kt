@@ -8,12 +8,15 @@
 
 package radio.kd0cq.x6100.ui.screens
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,8 +41,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -68,7 +77,37 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
     val frame by viewModel.screen.collectAsState()
     val reported by viewModel.keyNames.collectAsState()
     var pictureOnImage by remember { mutableStateOf(false) }
-    var fullScreen by remember { mutableStateOf(false) }
+    // The holder, not rememberSaveable, is what survives the recreation this flag causes.
+    // rememberSaveable can miss the write when setRequestedOrientation saves state in the
+    // same turn. A plain remember would close the picture on that recreation.
+    var fullScreen by remember { mutableStateOf(FullscreenLock.open) }
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(fullScreen, activity) {
+        val window = activity?.window
+        val bars = if (window != null) WindowInsetsControllerCompat(window, window.decorView) else null
+        if (fullScreen && activity != null && bars != null) {
+            FullscreenLock.open = true
+            if (!FullscreenLock.havePrevious) {
+                FullscreenLock.previous = activity.requestedOrientation
+                FullscreenLock.havePrevious = true
+            }
+            // Sensor landscape, not a fixed side: the 800×480 framebuffer then uses the
+            // phone's long edge instead of sitting in a portrait letterbox.
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            bars.hide(WindowInsetsCompat.Type.systemBars())
+            bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        onDispose {
+            // A configuration change disposes this effect on the way out. Restoring the
+            // orientation there would undo the lock before the new instance applies it.
+            if (!fullScreen || activity == null || activity.isChangingConfigurations) return@onDispose
+            val back = if (FullscreenLock.havePrevious) FullscreenLock.previous else null
+            FullscreenLock.open = false
+            FullscreenLock.havePrevious = false
+            if (back != null) activity.requestedOrientation = back
+            bars?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
     // Sharp is the picture a good link can carry. Fast (half size) is only asked for once
     // frames are actually late. An unchanged screen repeats about once a second, and that
     // gap is not treated as lag.
@@ -117,8 +156,23 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
         // with that picture; tapping again closes it. The keys stay on the page underneath.
         Dialog(
             onDismissRequest = { fullScreen = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+            ),
         ) {
+            val dialogView = LocalView.current
+            DisposableEffect(dialogView) {
+                val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+                if (dialogWindow != null) {
+                    WindowCompat.setDecorFitsSystemWindows(dialogWindow, false)
+                    val dialogBars = WindowInsetsControllerCompat(dialogWindow, dialogView)
+                    dialogBars.hide(WindowInsetsCompat.Type.systemBars())
+                    dialogBars.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+                onDispose { }
+            }
             Box(
                 Modifier
                     .fillMaxSize()
@@ -144,29 +198,31 @@ fun ScreenMirrorScreen(viewModel: RadioViewModel) {
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Screen", color = RfGuru.gold, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
-            PictureChip("Fast", picture == PanelCommands.Picture.FAST) {
-                choosePicture(PanelCommands.Picture.FAST)
+        // One scrolling row clipped "Full screen" to "Full" at the edge of the phone.
+        // Two rows keep every word on screen; nothing here depends on a sideways drag.
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Screen", color = RfGuru.gold, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+                PictureChip("Fast", picture == PanelCommands.Picture.FAST) {
+                    choosePicture(PanelCommands.Picture.FAST)
+                }
+                PictureChip("Balanced", picture == PanelCommands.Picture.BALANCED) {
+                    choosePicture(PanelCommands.Picture.BALANCED)
+                }
+                PictureChip("Sharp", picture == PanelCommands.Picture.SHARP) {
+                    choosePicture(PanelCommands.Picture.SHARP)
+                }
             }
-            PictureChip("Balanced", picture == PanelCommands.Picture.BALANCED) {
-                choosePicture(PanelCommands.Picture.BALANCED)
-            }
-            PictureChip("Sharp", picture == PanelCommands.Picture.SHARP) {
-                choosePicture(PanelCommands.Picture.SHARP)
-            }
-            PictureChip(if (pictureOnImage) "Keys on picture" else "Keys below", false) {
-                pictureOnImage = !pictureOnImage
-            }
-            if (image != null) {
-                PictureChip("Full screen", false) { fullScreen = true }
-            }
-            if (fellBack) {
-                Text("Fast: frames were late", color = RfGuru.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                PictureChip(if (pictureOnImage) "Keys on picture" else "Keys below", false) {
+                    pictureOnImage = !pictureOnImage
+                }
+                if (image != null) {
+                    PictureChip("Full screen", false) { fullScreen = true }
+                }
+                if (fellBack) {
+                    Text("Fast: frames were late", color = RfGuru.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                }
             }
         }
         // The framebuffer is 800×480. A weight(1) box letterboxed it with a tall black margin.
@@ -271,6 +327,28 @@ private fun PictureChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
+}
+
+/**
+ * Open while the radio picture is full screen, and the orientation to put back on close.
+ *
+ * KD0CQ: this sits outside composition because locking the activity to sensor
+ * landscape recreates it. The new instance reads [open] and shows the picture again; the
+ * orientation we captured is the one the phone had before the lock.
+ */
+private object FullscreenLock {
+    var open: Boolean = false
+    var previous: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    var havePrevious: Boolean = false
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
 @Composable

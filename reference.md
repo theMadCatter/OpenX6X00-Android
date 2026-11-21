@@ -183,3 +183,17 @@ The native waterfall was one bitmap column per FFT bin, stretched to the phone. 
 PTT, the lease, `PanelEventBus` and pairing are unchanged.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **175 tests, 0 failures, 0 errors** (168, plus the palette, interpolation, level, screen-picture and dial tests). `assembleDebug`: BUILD SUCCESSFUL. No emulator in this environment, so the sharper waterfall was not re-shot here.
+
+## Shot4 regressions (7edf2a6, 2400×1080 emulator)
+
+KD0CQ approved a fix pass against the simulated radio. Five regressions, each fixed at the cause:
+
+1. **Frequency.** `FreqPart`'s underline was `fillMaxWidth()` inside the digit `Row`, so the first group (`14`) consumed the row and `.100.000` never laid out. A scrap of a glyph sat against the USB chip. The 7-segment drawing is gone. The readout is tabular monospace (`tnum`) in gold, and `frequencyTextSp` sizes it from the slot (0.62 em advance, plus room for the +/− column, height capped so a 64 dp landscape header is not overflowed). The whole `14.100.000` stays on one line, at least the old 20 sp on a wide slot.
+2. **Waterfall.** Rows were painted 1:1 from the top, so a pane taller than the rows received so far left the bottom at palette index 0 (near black). After ~25 s that was about half the landscape pane. `historyRowAt` stretches the rows that exist across every pixel, and returns to one row per pixel once the history is as tall as the pane. Interpolation and the firmware palettes are unchanged, so a full history stays sharp.
+3. **Landscape deck.** The page key was labelled `VOL` / `1:2` beside `Vol` / `30`, which read as a second volume. In the compact row it is now `Page` / `1:2`. The group strip scrolled, so `DFL` clipped to `DF` and `MEM` sat past the edge. Landscape gives the six names equal weight with no scroll. PTT is 72 dp and the mic is the icon plus the switch, which leaves the five keys wide enough that `TX pwr` is not clipped. Portrait still says `VOL`.
+4. **Screen chips.** One horizontally scrolling row clipped `Full screen` to `Full`. The chips are two rows: picture mode, then keys and Full screen.
+5. **Full-screen mirror.** The dialog stayed in the activity's portrait orientation, so the 800×480 frame was letterboxed. While it is open the activity locks to sensor landscape and both windows hide the system bars. The lock and the orientation to restore live in `FullscreenLock`, because the orientation change recreates the activity and a `remember` would close the picture. On close, and only when this is not a configuration change, the previous orientation and the system bars come back. `MainActivity.onStop` already ignores configuration changes, so the lock does not unkey.
+
+PTT, the lease, and `PanelEventBus` are unchanged.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **177 tests, 0 failures, 0 errors** (the two new ones are `frequencyDigitsFitTheSlotTheyAreGiven` and `shortHistoryFillsThePaneAndAFullHistoryIsOneRowPerPixel`). `assembleDebug`: BUILD SUCCESSFUL. No emulator in this environment, so these five were not re-shot here.
