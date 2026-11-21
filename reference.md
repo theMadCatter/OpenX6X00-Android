@@ -329,6 +329,10 @@ Landscape spectrum-only left a bright lawn on the bottom and a dark void above i
 
 `theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
 
+## QRZ limited flag
+
+`QrzParse.limited` was true for any error, including the local "username and password are not set" result that has no callsign. The Log screen then added "QRZ did not include the full record" under the real error. `limited` is now true only when a callsign arrived with a blank name, grid, and QTH. A subscription reply that has the call and nothing else is still limited. `missingCredentialsIsTheErrorNotALimitedRecord` covers the empty-credentials path.
+
 ## Blade texture
 
 Noise blades were one height, so the field looked flat. Each column now adds a fixed fraction of its own level, at most a quarter of that blade. A level above the grass is not moved, so the carrier stays a clean peak and a scrolled row does not change shape. The shortened blade is still several times the row pitch, so the floor stays covered.
