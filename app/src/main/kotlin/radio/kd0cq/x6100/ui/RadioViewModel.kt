@@ -104,6 +104,14 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     private val qsoDb = QsoDatabase.open(application)
     private val qrzSecrets = QrzSecretStore(application)
     val stationPlace = StationPlace(application)
+    private val _stationGrid = MutableStateFlow(stationPlace.grid())
+    val stationGrid: StateFlow<String> = _stationGrid.asStateFlow()
+
+    /** The grid the header shows. This does not tell the radio: pos is not in the firmware yet. */
+    fun noteStationGrid(grid: String) {
+        stationPlace.writeGrid(grid)
+        _stationGrid.value = stationPlace.grid()
+    }
 
     /** No logging interceptor: a session URL contains the QRZ password. */
     private val qrzHttp = OkHttpClient.Builder().callTimeout(12, TimeUnit.SECONDS).build()

@@ -312,6 +312,7 @@ private fun LandscapeHeader(
     onPair: () -> Unit,
 ) {
     val freq = state?.freqHz ?: 0
+    val stationGrid by viewModel.stationGrid.collectAsState()
     Row(
         Modifier.fillMaxWidth().height(64.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -335,6 +336,9 @@ private fun LandscapeHeader(
                     fontSize = 11.sp,
                     modifier = Modifier.clickable { onPlaceholder("Clock") },
                 )
+                if (stationGrid.isNotBlank()) {
+                    Text(stationGrid, color = RfGuru.goldText, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Pill(RadioFace.bandLabel(freq, bands), on = state != null)
@@ -463,10 +467,11 @@ private fun PortraitOperating(
     // No scroll. A fixed 300 dp scope plus the sliders pushed F1–F5 under the PTT row, so the
     // keys showed as a sliver. The scope takes the space that is left after the keys, and the
     // keys stay on screen on a 1080×2400 phone.
+    val stationGrid by viewModel.stationGrid.collectAsState()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
-            ClockBlock(state?.battery, onPlaceholder)
+            ClockBlock(state?.battery, onPlaceholder, stationGrid = stationGrid)
         }
         StatusIconRow(onPlaceholder)
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
