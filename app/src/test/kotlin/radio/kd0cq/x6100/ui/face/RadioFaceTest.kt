@@ -161,6 +161,13 @@ class RadioFaceTest {
         assertTrue(split.spectrumPx >= 24f)
         val portrait = RadioFace.scopeSplit(300f, 16f, 14f, waterfallShare = 0f, zoomGuardPx = 24f)
         assertEquals(108f, portrait.spectrumPx, 0.5f)
+        // The 3D ridges take a little of the waterfall's height. The waterfall stays the
+        // larger part of the landscape pane, and portrait grows past the 40% trace.
+        val ridge = RadioFace.scopeSplit(240f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f, ridge = true)
+        assertTrue(ridge.spectrumPx > split.spectrumPx)
+        assertTrue(ridge.waterfallPx > ridge.spectrumPx)
+        val portraitRidge = RadioFace.scopeSplit(300f, 16f, 14f, waterfallShare = 0f, zoomGuardPx = 24f, ridge = true)
+        assertTrue(portraitRidge.spectrumPx > portrait.spectrumPx)
     }
 
     @Test

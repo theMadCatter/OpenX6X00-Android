@@ -222,12 +222,14 @@ object WaterfallDisplay {
      * Linear sample. Index 0 is bin 0 and the last bin is held at the right edge.
      * A negative index or one past the last bin is outside this row (the radio paints its noise there).
      */
-    fun sampleBin(db: ByteArray, index: Float): Float? {
-        if (db.isEmpty()) return null
-        if (index < 0f || index > db.size.toFloat()) return null
-        if (db.size == 1) return db[0].toFloat()
-        val clamped = index.coerceAtMost((db.size - 1).toFloat())
-        val i = clamped.toInt().coerceIn(0, db.size - 2)
+    fun sampleBin(db: ByteArray, index: Float, bins: Int = db.size): Float? {
+        // [bins] is the live length when the array is a reused slot that is longer than the frame.
+        val n = bins.coerceIn(0, db.size)
+        if (n == 0) return null
+        if (index < 0f || index > n.toFloat()) return null
+        if (n == 1) return db[0].toFloat()
+        val clamped = index.coerceAtMost((n - 1).toFloat())
+        val i = clamped.toInt().coerceIn(0, n - 2)
         val frac = clamped - i
         val a = db[i].toInt()
         val b = db[i + 1].toInt()
