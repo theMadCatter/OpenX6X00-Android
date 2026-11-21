@@ -65,6 +65,7 @@ fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
         BackgroundSwitch()
         StationToggles(viewModel)
         FieldOptions()
+        AlertOptions()
         Line("panel", phase.name.lowercase())
         Line("tci", tciPhase.name.lowercase())
         Line("radio", endpoint?.let { "${it.name} ${it.host}:${it.panelPort} / ${it.tciPort}" } ?: "-")
@@ -258,6 +259,35 @@ private fun FieldOptions() {
             }
         }
     }
+}
+
+/** Low battery from `bat`, high SWR from the `t` meter. The shade never sends PTT. */
+@Composable
+private fun AlertOptions() {
+    val context = LocalContext.current
+    val prefs = remember { radio.kd0cq.x6100.service.AlertPrefs(context) }
+    var battery by remember { mutableStateOf(prefs.battery().toString()) }
+    var swr by remember { mutableStateOf(prefs.swr().toString()) }
+    Text("Alerts", style = MaterialTheme.typography.titleMedium)
+    Text("Battery percent, and SWR while transmitting. Default 2.5:1.", color = RfGuru.dim, style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.material3.OutlinedTextField(
+            value = battery,
+            onValueChange = { battery = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Battery %") },
+            modifier = Modifier.weight(1f),
+        )
+        androidx.compose.material3.OutlinedTextField(
+            value = swr,
+            onValueChange = { swr = it.filter { ch -> ch.isDigit() || ch == '.' } },
+            label = { Text("SWR") },
+            modifier = Modifier.weight(1f),
+        )
+    }
+    TextButton(onClick = {
+        battery.toIntOrNull()?.let { prefs.writeBattery(it) }
+        swr.toDoubleOrNull()?.let { prefs.writeSwr(it) }
+    }) { Text("Save alert marks", color = RfGuru.gold) }
 }
 
 @Composable

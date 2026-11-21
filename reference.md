@@ -345,3 +345,15 @@ A tap selects one frequency digit. Drag, the volume keys, or +/− step that dig
 The S-meter can be the existing arc, a classic needle, an LED bar, or a lamp with a peak that decays. Transmit still shows power, SWR, and ALC.
 
 `./gradlew testDebugUnitTest assembleDebug` after this feature includes `FieldDisplayTest`. Assemble succeeded.
+
+## Notification quick keys and alerts
+
+The background shade keeps Open and Stop, and adds a compact row: Band up/down, Mode, Vol +/−, and ATT/PRE/NB/NR. Mode, band, and the toggles are `set`. Volume is `knob vol`, which is the encoder the protocol already has. PTT is refused in the quick-key table and never appears on the shade.
+
+A separate alert fires when `bat` is at or under the Setup percent, and when the `t` meter SWR is at or over the Setup ratio while the radio is transmitting. The default ratio is 2.5:1. Each alert waits 60 seconds before it can fire again.
+
+`./gradlew testDebugUnitTest assembleDebug` after this feature includes `QuickKeysTest`. Assemble succeeded.
+
+## What this pass found
+
+`pos`, `clk`, and `js8` are not in `remote_server.c`. Those screens store the choice and do not write the socket. Spot labels, `log`/`logq`, `ft8 reply`, `set`/`key`/`knob`, `bat`, the `t` meter, and `spots` are real. The sunlight face and the meter styles are paint. Digit entry still ends in `set freq`.
