@@ -483,6 +483,9 @@ fun SpectrumStack(
     val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
     val ridgeScratch = remember { RidgeScratch() }
     val leveler = remember { WaterfallLeveler() }
+    // The 3D scale, not the waterfall's. A carrier has to be able to reach the top
+    // of this pane even when the waterfall's 36 dB window would leave it mid-scale.
+    val ridgeRange = remember { RidgeRange() }
     val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
     var mapName by rememberSaveable { mutableStateOf(WfColormap.GAUSS.name) }
@@ -509,6 +512,7 @@ fun SpectrumStack(
         history.push(current.db, current.centreHz, current.widthHz)
         // Same frames the waterfall keeps. The ring copies into slots it already owns.
         ridgeRing.push(current.db, current.centreHz, current.widthHz)
+        ridgeRange.update(current.db, current.bins)
         tick++
     }
     val rows = remember(tick) { history.snapshot() }
@@ -642,8 +646,8 @@ fun SpectrumStack(
                     style = ridgeStyle,
                     specH = specH,
                     viewWidth = size.width,
-                    floor = window.first,
-                    ceiling = window.second,
+                    floor = ridgeRange.floorDb,
+                    ceiling = ridgeRange.ceilingDb,
                     viewCentreHz = spectrumFrame.centreHz,
                     viewWidthHz = spectrumFrame.widthHz,
                 )
@@ -869,13 +873,13 @@ private fun DrawScope.drawRidgePlot(
     style: RidgeStyle,
     specH: Float,
     viewWidth: Float,
-    floor: Int,
-    ceiling: Int,
+    floor: Float,
+    ceiling: Float,
     viewCentreHz: Int,
     viewWidthHz: Int,
 ) {
     if (specH < 2f || viewWidth < 2f || ring.count <= 0 || viewWidthHz <= 0) return
-    val span = (ceiling - floor).coerceAtLeast(1).toFloat()
+    val span = ceiling - floor
     val samples = scratch.x.size
     // A tall spectrum-only pane draws more ridges, and a slightly taller peak fraction.
     // Using the ring's full depth here would squash that history into the short combined pane.
@@ -893,10 +897,13 @@ private fun DrawScope.drawRidgePlot(
         val rowWidth = ring.widthAt(age)
         if (rowBins <= 0 || rowWidth <= 0) continue
         for (i in 0 until samples) {
-            val hz = WaterfallDisplay.hzAtPixel(i, samples, viewCentreHz, viewWidthHz)
-            val index = WaterfallDisplay.binAtHz(hz, rowCentre, rowWidth, rowBins)
-            val db = WaterfallDisplay.sampleBin(row, index, rowBins) ?: floor.toFloat()
-            scratch.level[i] = SpectrumRidge.shapeLevel(((db - floor) / span).coerceIn(0f, 1f))
+            // The loudest bin in the column, not the bin at its centre. A carrier
+            // one bin wide used to fall between the 96 sample points and vanish.
+            val db = SpectrumRidge.columnPeakDb(
+                row, rowBins, i, samples, viewCentreHz, viewWidthHz, rowCentre, rowWidth,
+            )
+            val above = if (db == Float.NEGATIVE_INFINITY) 0f else db - floor
+            scratch.level[i] = SpectrumRidge.shapeDb(above, span)
         }
         SpectrumRidge.smoothSpatial(scratch.level, scratch.shaped, samples)
         val sameSpan = haveOlder && olderCentre == rowCentre && olderWidth == rowWidth
