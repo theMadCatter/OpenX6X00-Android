@@ -62,6 +62,7 @@ class RadioConnectionService : LifecycleService() {
         // touches anything, and the audio has to be open when the radio's frames start arriving.
         RadioRigs.rig(this)
         watchState()
+        watchSpots()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -145,6 +146,58 @@ class RadioConnectionService : LifecycleService() {
         link.disconnect()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /**
+     * A matching spot, including while the screen is off. The foreground service is already
+     * running, so this does not start a second one. The gate stops a busy cluster buzzing.
+     */
+    private fun watchSpots() {
+        lifecycleScope.launch {
+            var seen = emptySet<String>()
+            var primed = false
+            var lastGlobal = 0L
+            val lastCall = HashMap<String, Long>()
+            link.spots.collect { spots ->
+                val watches = radio.kd0cq.x6100.spots.HunterPrefs(this@RadioConnectionService).watches()
+                val calls = spots.map { it.call }
+                val freqs = spots.map { it.freqHz }
+                val fresh = radio.kd0cq.x6100.spots.Hunter.fresh(seen, calls, freqs)
+                seen = spots.map { radio.kd0cq.x6100.spots.Hunter.key(it.call, it.freqHz) }.toSet()
+                // The first list is what the radio already held. Alert on the next arrival.
+                if (!primed) {
+                    primed = true
+                    return@collect
+                }
+                val now = SystemClock.elapsedRealtime()
+                for (index in fresh) {
+                    val spot = spots[index]
+                    if (!radio.kd0cq.x6100.spots.Hunter.matches(spot.call, watches, spot.alert)) continue
+                    val callKey = radio.kd0cq.x6100.log.QsoBook.baseCall(spot.call)
+                    if (!radio.kd0cq.x6100.spots.AlertGate.allow(now, lastGlobal, lastCall[callKey] ?: 0L)) continue
+                    lastGlobal = now
+                    lastCall[callKey] = now
+                    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    val channel = NotificationChannel(HUNTER_CHANNEL, "Spot hunter", NotificationManager.IMPORTANCE_DEFAULT)
+                    manager.createNotificationChannel(channel)
+                    val open = PendingIntent.getActivity(
+                        this@RadioConnectionService,
+                        3,
+                        Intent(this@RadioConnectionService, radio.kd0cq.x6100.MainActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    val note = NotificationCompat.Builder(this@RadioConnectionService, HUNTER_CHANNEL)
+                        .setSmallIcon(R.drawable.ic_radio)
+                        .setContentTitle(spot.call)
+                        .setContentText("${spot.freqHz / 1000} kHz  ${spot.comment}")
+                        .setContentIntent(open)
+                        .setAutoCancel(true)
+                        .build()
+                    manager.notify(HUNTER_ID, note)
+                    break
+                }
+            }
+        }
     }
 
     /** Wake and Wi-Fi only for the case [BackgroundRun.wantLocks] names. */
@@ -288,6 +341,8 @@ class RadioConnectionService : LifecycleService() {
 
     companion object {
         private const val CHANNEL = "radio-link"
+        private const val HUNTER_CHANNEL = "spot-hunter"
+        private const val HUNTER_ID = 0x6101
         private const val NOTIFICATION_ID = 0x6100
 
         const val ACTION_STOP = "radio.kd0cq.x6100.action.STOP"

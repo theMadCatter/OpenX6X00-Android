@@ -15,15 +15,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import radio.kd0cq.x6100.net.Spot
+import radio.kd0cq.x6100.spots.HunterPrefs
 import radio.kd0cq.x6100.ui.RadioViewModel
 
 /**
@@ -42,6 +49,7 @@ fun SpotsScreen(viewModel: RadioViewModel) {
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
         )
+        HunterEditor()
         if (spots.isEmpty()) {
             Text(
                 "No spots. The radio fills this once its cluster client is connected to a repeater; " +
@@ -77,4 +85,15 @@ private fun SpotRow(spot: Spot, onTune: (Int) -> Unit) {
         spot.comment.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text("Tap to tune", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
     }
+}
+
+/** One pattern per line. A trailing * is a prefix. The radio's own alert flag is watched too. */
+@Composable
+private fun HunterEditor() {
+    val context = LocalContext.current
+    val prefs = remember { HunterPrefs(context) }
+    var text by remember { mutableStateOf(prefs.watches().joinToString("\n")) }
+    Text("Hunter. One call per line, or a prefix with *.", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+    OutlinedTextField(value = text, onValueChange = { text = it.uppercase() }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+    OutlinedButton(onClick = { prefs.write(text) }) { Text("Save hunter list") }
 }

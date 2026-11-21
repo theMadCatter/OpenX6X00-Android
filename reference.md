@@ -329,3 +329,9 @@ FT8 already had `ft8 reply ID`. The list now marks CQ, a call to the operator, a
 `remote_server.c` has no `js8`, `js8r` or `js8 wf`. The JS8 screen parses those lines and builds the commands, and it does not send them. Heartbeat, CQ and compose say the firmware does not have them yet.
 
 `./gradlew testDebugUnitTest assembleDebug` after this feature includes `DigitalTest`. Assemble succeeded.
+
+## Spot labels and the hunter
+
+Callsign labels were already drawn on the scope. Overlapping ones are now dropped, newest first, so a busy slice stays readable. A tap still tunes. The hunter list is exact calls plus prefixes that end in `*`, and the radio's own `alert` flag. A match raises one notification, including in the background, at most once per 30 seconds and once per call per 10 minutes. The first list after connect is the history the radio already held, so it does not buzz for that.
+
+`./gradlew testDebugUnitTest assembleDebug` after this feature includes `HunterTest`. Assemble succeeded.
