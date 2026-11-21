@@ -16,7 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import radio.kd0cq.x6100.discovery.FoundRadio
 import radio.kd0cq.x6100.discovery.RadioDiscovery
 import radio.kd0cq.x6100.net.Band
@@ -39,8 +41,20 @@ import radio.kd0cq.x6100.net.SpectrumFrame
 import radio.kd0cq.x6100.net.Spot
 import radio.kd0cq.x6100.net.TCI_PORT
 import radio.kd0cq.x6100.net.TxMeters
+import radio.kd0cq.x6100.log.QrzLookup
+import radio.kd0cq.x6100.log.QrzParse
+import radio.kd0cq.x6100.log.QrzSecretStore
+import radio.kd0cq.x6100.log.Qso
+import radio.kd0cq.x6100.log.QsoBook
+import radio.kd0cq.x6100.log.QsoDatabase
+import radio.kd0cq.x6100.log.StationPlace
+import radio.kd0cq.x6100.log.toEntity
+import radio.kd0cq.x6100.log.toQso
 import radio.kd0cq.x6100.service.RadioConnectionService
 import radio.kd0cq.x6100.service.RadioRigs
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 /**
  * What the screens show and do: the link's state in, the radio's commands out. The link itself is the
@@ -82,6 +96,31 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     val receipts: StateFlow<List<LoggedReceipt>> = link.receipts
     val sessions: StateFlow<List<SessionInfo>> = link.sessions
     val spectrum: StateFlow<SpectrumFrame?> = link.spectrum
+
+    /**
+     * Local QSOs. The radio's `logq` is a second write of the same text. The password for
+     * QRZ never enters this flow.
+     */
+    private val qsoDb = QsoDatabase.open(application)
+    private val qrzSecrets = QrzSecretStore(application)
+    val stationPlace = StationPlace(application)
+
+    /** No logging interceptor: a session URL contains the QRZ password. */
+    private val qrzHttp = OkHttpClient.Builder().callTimeout(12, TimeUnit.SECONDS).build()
+    private val qrzLookup = QrzLookup { url ->
+        qrzHttp.newCall(Request.Builder().url(url).build()).execute().use { body ->
+            body.body?.string().orEmpty()
+        }
+    }
+
+    val qsos: StateFlow<List<Qso>> = qsoDb.qsos().all()
+        .map { rows -> rows.map { it.toQso() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _qrz = MutableStateFlow<QrzParse?>(null)
+    val qrzResult: StateFlow<QrzParse?> = _qrz.asStateFlow()
+    private val _qrzBusy = MutableStateFlow(false)
+    val qrzBusy: StateFlow<Boolean> = _qrzBusy.asStateFlow()
 
     /** The radio's own framebuffer, while [wantScreenFrames] has asked for it. */
     val screen: StateFlow<radio.kd0cq.x6100.net.ScreenFrame?> = link.screen
@@ -253,6 +292,37 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The FT8 app's switches, one command each. */
     fun ft8(what: String, arg: String? = null) = send(PanelCommands.ft8(what, arg))
+
+    fun qrzUsername(): String = qrzSecrets.username()
+
+    /** Stored in the keystore. The password is not logged. */
+    fun saveQrzCredentials(username: String, password: String) {
+        qrzSecrets.write(username, password)
+    }
+
+    fun lookupQrz(call: String) {
+        val wanted = call.trim()
+        if (wanted.isEmpty()) return
+        viewModelScope.launch {
+            _qrzBusy.value = true
+            val parsed = withContext(Dispatchers.IO) {
+                qrzLookup.lookup(qrzSecrets.username(), qrzSecrets.password(), wanted)
+            }
+            _qrz.value = parsed
+            _qrzBusy.value = false
+        }
+    }
+
+    /**
+     * Keep a local row and send `logq`. The radio's command has no time column, so the
+     * time stays in the local row. A blank password is not part of either write.
+     */
+    fun saveLoggedQso(qso: Qso) {
+        viewModelScope.launch(Dispatchers.IO) { qsoDb.qsos().insert(qso.toEntity()) }
+        if (qso.radioLogId != 0L) send(PanelCommands.logq(qso.radioLogId, QsoBook.radioText(qso)))
+    }
+
+    fun adifExport(): String = QsoBook.adif(qsos.value)
 
     /** Ask the radio to send its own screen, or to stop. [picture] picks sharp, balanced or fast JPEG. */
     fun wantScreenFrames(on: Boolean, picture: PanelCommands.Picture? = null) = link.wantScreenFrames(on, picture)

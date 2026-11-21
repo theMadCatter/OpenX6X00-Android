@@ -309,3 +309,9 @@ What changed, 3D only. PTT, the lease, `PanelEventBus`, background mode, the lay
 - `DEPTH_CURVE` is 0.80, so the front gaps are a little tighter and the back is still closer.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **199 tests, 0 failures, 0 errors**. `aRowIsFrozenOnceItLeavesTheFront` keeps a copy of the front row and requires the same samples two frames later, including after the floor has moved. No emulator here, so this pass was not re-shot.
+
+## QRZ logger
+
+`remote_server.c` writes a QSO with `log` / `logq ID CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY` and answers `logged ID ok|no`. That line has no time column, so the time is only in the local Room table. QRZ is the public XML API. The username and password go in EncryptedSharedPreferences and are not logged. A session error or a call with no name and no grid is shown as a limited record. Distance and bearing use the operator's grid. The map is a canvas, with no tile server. ADIF leaves through the share sheet.
+
+`./gradlew testDebugUnitTest assembleDebug` after this feature: the logger tests in `LoggerTest` (XML, distance, bearing, ADIF, worked-before). Assemble succeeded.
