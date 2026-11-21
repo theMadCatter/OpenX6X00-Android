@@ -125,6 +125,12 @@ object SpectrumRidge {
     const val MAX_DEPTH = 128
 
     /**
+     * How far a noise blade may differ from its neighbours, as a fraction of
+     * its own level. The sign comes from the column. Signals are not moved.
+     */
+    const val BLADE_GRAIN = 0.90f
+
+    /**
      * Columns across one ridge. Half the FFT, so a full-span column is two bins
      * and the floor reads as fine blades. Each column still peak-holds the bins
      * it covers, which is what keeps a one-bin carrier from falling in a gap.
@@ -583,7 +589,8 @@ object SpectrumRidge {
         if (level > GRASS_HEIGHT) return 0f
         val mixed = column * 0x45D9F3B
         val unit = ((mixed xor (mixed ushr 16)) and 0xFF) / 255f
-        return (unit - 0.5f) * 0.5f * level.coerceAtLeast(0f)
+        // At most just under half the blade. Past that the short columns open the floor.
+        return (unit - 0.5f) * BLADE_GRAIN * level.coerceAtLeast(0f)
     }
 
     /**
@@ -854,6 +861,29 @@ class SpectrumRidgeRing(
     private fun slot(age: Int): Int {
         val known = age.coerceIn(0, (count - 1).coerceAtLeast(0))
         return (next - 1 - known).mod(depth)
+    }
+}
+
+/**
+ * The 3D history for the life of the screen.
+ *
+ * The spectrum pane used to allocate its own ring. A rotation disposes that
+ * pane, so the new one started empty and the grass was a thin lawn until the
+ * radio had sent another full field. This holder is the ring. Draw re-projects
+ * the baked rows into the new pane. [accept] copies into slots that already
+ * exist, and a repeated sequence (the frame still current when the pane comes
+ * back) does not scroll them.
+ */
+class RidgeHold {
+    val ring = SpectrumRidgeRing(SpectrumRidge.MAX_DEPTH)
+    val range = RidgeRange()
+    private var lastSequence = Long.MIN_VALUE
+
+    fun accept(db: ByteArray, bins: Int, centreHz: Int, widthHz: Int, sequence: Long) {
+        if (sequence == lastSequence) return
+        lastSequence = sequence
+        range.update(db, bins)
+        ring.push(db, centreHz, widthHz, range.floorDb, range.ceilingDb)
     }
 }
 

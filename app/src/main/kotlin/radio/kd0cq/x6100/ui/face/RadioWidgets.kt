@@ -622,6 +622,7 @@ fun SpectrumStack(
     onKnob: (Int) -> Unit,
     onZoom: (narrower: Boolean) -> Unit,
     waterfallShare: Float = 0f,
+    ridgeHold: RidgeHold,
     modifier: Modifier = Modifier,
 ) {
     // Off while the activity is stopped. Collecting here is what scrolls the waterfall
@@ -635,15 +636,13 @@ fun SpectrumStack(
     // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
     // row per pixel instead of stretching 48 rows into blocks.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
-    // The ring keeps every frame the Aether field draws. The FT comb uses the front DEPTH rows.
-    val ridgeRing = remember { SpectrumRidgeRing(SpectrumRidge.MAX_DEPTH) }
+    // Paths and the sample scratch are draw buffers. The history they read is [ridgeHold],
+    // which the screen keeps across rotation. A ring allocated here would be empty after
+    // the pane is disposed, and the field would be a thin lawn until it filled again.
     val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
     val ridgeVeil = remember { Path() }
     val ridgeScratch = remember { RidgeScratch() }
     val leveler = remember { WaterfallLeveler() }
-    // The 3D scale, not the waterfall's. A carrier has to be able to reach the top
-    // of this pane even when the waterfall's 36 dB window would leave it mid-scale.
-    val ridgeRange = remember { RidgeRange() }
     val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
     var mapName by rememberSaveable { mutableStateOf(WfColormap.GAUSS.name) }
@@ -668,14 +667,8 @@ fun SpectrumStack(
         history.push(current.db, current.centreHz, current.widthHz)
         // The range includes this frame, then the ring bakes the levels with it.
         // Later draws read that bake. They do not reshape the row when the floor moves.
-        ridgeRange.update(current.db, current.bins)
-        ridgeRing.push(
-            current.db,
-            current.centreHz,
-            current.widthHz,
-            ridgeRange.floorDb,
-            ridgeRange.ceilingDb,
-        )
+        // The same sequence is ignored, so coming back to this pane does not scroll.
+        ridgeHold.accept(current.db, current.bins, current.centreHz, current.widthHz, current.sequence)
         tick++
     }
     val rows = remember(tick) { history.snapshot() }
@@ -803,7 +796,7 @@ fun SpectrumStack(
                 drawLine(RfGuru.dim, Offset(0f, specH / 2f), Offset(size.width, specH / 2f), strokeWidth = 1f)
             } else if (ridge) {
                 drawRidgePlot(
-                    ring = ridgeRing,
+                    ring = ridgeHold.ring,
                     fills = ridgeFills,
                     veil = ridgeVeil,
                     scratch = ridgeScratch,
