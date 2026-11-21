@@ -574,6 +574,19 @@ object SpectrumRidge {
     fun bladeSplit(baseY: Float, tipY: Float): Float = tipY + (baseY - tipY) * BLADE_TIP
 
     /**
+     * Extra height for one noise blade, as a fraction of a full-scale peak.
+     * The value depends only on the column, so a row does not shimmer as it
+     * scrolls. A signal above the grass is left alone, which keeps a carrier
+     * a single clean peak. The swing stays inside the overlap between rows.
+     */
+    fun bladeTexture(column: Int, level: Float): Float {
+        if (level > GRASS_HEIGHT) return 0f
+        val mixed = column * 0x45D9F3B
+        val unit = ((mixed xor (mixed ushr 16)) and 0xFF) / 255f
+        return (unit - 0.5f) * 0.5f * level.coerceAtLeast(0f)
+    }
+
+    /**
      * The sheet under the Aether blades. Green, and translucent, so stacked rows
      * hide the dark floor without painting out the blades. [age] dims the back
      * the same way the blade tips dim. The FT comb does not use this.
