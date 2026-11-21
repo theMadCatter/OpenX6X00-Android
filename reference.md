@@ -335,3 +335,13 @@ FT8 already had `ft8 reply ID`. The list now marks CQ, a call to the operator, a
 Callsign labels were already drawn on the scope. Overlapping ones are now dropped, newest first, so a busy slice stays readable. A tap still tunes. The hunter list is exact calls plus prefixes that end in `*`, and the radio's own `alert` flag. A match raises one notification, including in the background, at most once per 30 seconds and once per call per 10 minutes. The first list after connect is the history the radio already held, so it does not buzz for that.
 
 `./gradlew testDebugUnitTest assembleDebug` after this feature includes `HunterTest`. Assemble succeeded.
+
+## Field display
+
+Setup can switch the chrome to a sunlight face: white page, black text, light system bars. The spectrum palettes stay the firmware colours, because those are signal level. The night face is still what the app starts in.
+
+A tap selects one frequency digit. Drag, the volume keys, or +/− step that digit by its place (1 Hz through 10 MHz). A long-press opens a keypad and the result is still `set freq`. With no digit selected, +/− keeps stepping the MHz, kHz, or Hz group.
+
+The S-meter can be the existing arc, a classic needle, an LED bar, or a lamp with a peak that decays. Transmit still shows power, SWR, and ALC.
+
+`./gradlew testDebugUnitTest assembleDebug` after this feature includes `FieldDisplayTest`. Assemble succeeded.

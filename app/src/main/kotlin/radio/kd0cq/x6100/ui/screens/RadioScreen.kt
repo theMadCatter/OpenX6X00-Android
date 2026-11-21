@@ -349,6 +349,7 @@ private fun LandscapeHeader(
                     onBump = { dir ->
                         if (canOperate) viewModel.setFrequency(RadioFace.bumpFrequency(freq, freqGroup, dir))
                     },
+                    onTune = { hz -> if (canOperate) viewModel.setFrequency(hz) },
                     large = false,
                     modifier = Modifier.weight(1f),
                 )
@@ -633,6 +634,7 @@ private fun FreqStrip(
                 onBump = { dir ->
                     if (canOperate) viewModel.setFrequency(RadioFace.bumpFrequency(freq, freqGroup, dir))
                 },
+                onTune = { hz -> if (canOperate) viewModel.setFrequency(hz) },
                 large = large,
                 modifier = Modifier.weight(1f),
             )

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.graphics.Color
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -23,6 +24,8 @@ import radio.kd0cq.x6100.service.RadioConnectionService
 import radio.kd0cq.x6100.service.RadioRigs
 import radio.kd0cq.x6100.ui.AppNav
 import radio.kd0cq.x6100.ui.RadioViewModel
+import radio.kd0cq.x6100.ui.face.DigitKeys
+import radio.kd0cq.x6100.ui.face.FaceChoices
 import radio.kd0cq.x6100.ui.theme.OpenX6X00Theme
 
 /**
@@ -47,12 +50,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Build the shared link before any screen reads its flows; the service starts it later.
         RadioLinks.link(application)
+        FaceChoices.load(application)
         askAboutNotifications()
         setContent {
             OpenX6X00Theme {
                 AppNav(viewModel)
             }
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val step = DigitKeys.onStep
+        if (step != null && event.action == KeyEvent.ACTION_DOWN) {
+            val dir = when (event.keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> 1
+                KeyEvent.KEYCODE_VOLUME_DOWN -> -1
+                else -> 0
+            }
+            if (dir != 0 && step(dir)) return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onStart() {
