@@ -21,6 +21,29 @@ package radio.kd0cq.x6100.ui.face
 
 import kotlin.math.roundToInt
 
+/**
+ * What shares the scope pane. [BOTH] is the radio's usual stack. [SPECTRUM] gives the
+ * trace or the 3D surface the whole pane (scale and band plan stay). [WATERFALL] gives
+ * that room to the scrolling history.
+ */
+enum class ScopeLayout(val chip: String, val stored: String) {
+    BOTH("S+W", "both"),
+    SPECTRUM("Spec", "spectrum"),
+    WATERFALL("WF", "waterfall"),
+    ;
+
+    fun next(): ScopeLayout {
+        val all = entries
+        return all[(ordinal + 1) % all.size]
+    }
+
+    companion object {
+        /** A missing preference is the combined scope. */
+        fun fromStored(value: String?): ScopeLayout =
+            entries.firstOrNull { it.stored == value } ?: BOTH
+    }
+}
+
 /** Which drawing sits in the spectrum pane. 2D is the trace the radio face already had. */
 enum class SpectrumView(val chip: String, val stored: String) {
     TRACE("2D", "2d"),
@@ -72,8 +95,11 @@ enum class RidgeStyle(val stored: String, val chip: String) {
  * a wall instead of a wrinkle.
  */
 object SpectrumRidge {
-    /** Frames kept. The FT-710 stream is deep; 64 still fits a phone if each row is one fill per colour. */
+    /** Frames drawn when the spectrum shares the pane with the waterfall. */
     const val DEPTH = 64
+
+    /** Frames the ring can hold when the spectrum has the whole pane. */
+    const val MAX_DEPTH = 128
 
     /** Samples across one ridge. Wide enough to be smooth after the spatial pass, few enough to fill quickly. */
     const val SAMPLES = 96
@@ -110,6 +136,30 @@ object SpectrumRidge {
 
     /** Faint floor grid, ARGB. Drawn over the surface so it stays visible on the sheet. */
     const val GRID_ARGB = 0x5590C8BC.toInt()
+
+    /**
+     * How many ridges to draw in a spectrum pane of [spectrumPx].
+     *
+     * The combined pane is short, so it stays at [DEPTH]. A spectrum-only pane is the
+     * waterfall's height as well. That height adds rows, up to [MAX_DEPTH], instead of
+     * painting the same [DEPTH] ridges as thicker bands.
+     */
+    fun rowsForHeight(spectrumPx: Float): Int {
+        if (spectrumPx <= 0f) return DEPTH
+        return (spectrumPx / 3.5f).roundToInt().coerceIn(DEPTH, MAX_DEPTH)
+    }
+
+    /**
+     * Peak fraction for a pane of [spectrumPx]. The combined pane uses [AMPLITUDE].
+     * Extra height raises it a little, capped, so a full-scope peak is taller in pixels
+     * than a stretched copy of the short plot and still leaves sky above the crest.
+     */
+    fun amplitudeFor(spectrumPx: Float): Float {
+        val reference = 140f
+        if (spectrumPx <= reference) return AMPLITUDE
+        val extra = ((spectrumPx - reference) / 2000f).coerceIn(0f, 0.10f)
+        return AMPLITUDE + extra
+    }
 
     fun projectX(
         i: Int,

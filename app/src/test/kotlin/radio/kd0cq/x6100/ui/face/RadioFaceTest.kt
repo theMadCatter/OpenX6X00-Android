@@ -171,6 +171,32 @@ class RadioFaceTest {
     }
 
     @Test
+    fun scopeLayoutGivesTheWholeRoomToOnePane() {
+        // 400 px stands in for the scope after the header. The scale and the plan stay
+        // outside the room, so spectrum-only is that room and the waterfall is gone.
+        val both = RadioFace.scopeSplit(400f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f)
+        val spectrum = RadioFace.scopeSplit(
+            400f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f, layout = ScopeLayout.SPECTRUM,
+        )
+        assertEquals(0f, spectrum.waterfallPx, 0.01f)
+        assertEquals(370f, spectrum.spectrumPx, 0.01f)
+        assertTrue(spectrum.spectrumPx > both.spectrumPx * 2f)
+        val waterfall = RadioFace.scopeSplit(
+            400f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f, layout = ScopeLayout.WATERFALL,
+        )
+        assertEquals(0f, waterfall.spectrumPx, 0.01f)
+        assertEquals(370f, waterfall.waterfallPx, 0.01f)
+        assertEquals(ScopeLayout.BOTH, ScopeLayout.fromStored(null))
+        assertEquals(ScopeLayout.BOTH, ScopeLayout.fromStored("later"))
+        assertEquals(ScopeLayout.SPECTRUM, ScopeLayout.fromStored("spectrum"))
+        assertEquals(ScopeLayout.WATERFALL, ScopeLayout.fromStored("waterfall"))
+        assertEquals("S+W", ScopeLayout.BOTH.chip)
+        assertEquals(ScopeLayout.SPECTRUM, ScopeLayout.BOTH.next())
+        assertEquals(ScopeLayout.WATERFALL, ScopeLayout.SPECTRUM.next())
+        assertEquals(ScopeLayout.BOTH, ScopeLayout.WATERFALL.next())
+    }
+
+    @Test
     fun keyNamesPackOntoRowsThatFitTheWidth() {
         val names = listOf("GEN", "KEY", "DFN", "BAND_DOWN", "BAND_UP", "APP", "MSG")
         val rows = RadioFace.packKeyRows(names, widthDp = 180f)
