@@ -72,21 +72,26 @@ class SpectrumRidgeTest {
     }
 
     @Test
-    fun colourRunsFromABrightGreenLawnToARedPeak() {
+    fun colourRunsFromTealNoiseToARedPeak() {
         val floor = SpectrumRidge.levelArgb(0f)
-        val tips = SpectrumRidge.levelArgb(0.20f)
+        val mid = SpectrumRidge.levelArgb(0.40f)
+        val high = SpectrumRidge.levelArgb(0.70f)
         val peak = SpectrumRidge.levelArgb(1f)
-        // The lawn is already bright. A dark floor is what the emulator showed as a flat sheet.
-        assertTrue(green(floor) > 160)
-        assertTrue(blue(floor) > 100)
+        // Noise is teal-green, not the lime that flooded the pane. Yellow is for the high part.
         assertTrue(green(floor) > red(floor))
-        assertTrue(red(tips) + green(tips) > red(floor) + green(floor))
-        assertTrue(red(peak) > 220)
+        assertTrue(green(floor) in 80..170)
+        assertTrue(blue(floor) > 60)
+        assertTrue(green(mid) >= green(floor) - 20)
+        assertTrue(red(high) > 180 && green(high) > 80)
+        assertTrue(red(peak) > 200)
         assertTrue(green(peak) < 80)
-        assertTrue(red(peak) > red(tips))
         assertEquals(0, SpectrumRidge.colorStep(0f))
         assertEquals(SpectrumRidge.COLOR_STEPS - 1, SpectrumRidge.colorStep(1f))
         assertEquals(SpectrumRidge.levelArgb(0f), SpectrumRidge.stepArgb(0))
+        val veil = SpectrumRidge.veilArgb(RidgeStyle.AETHER)
+        val alpha = (veil ushr 24) and 0xFF
+        assertTrue(alpha in 0xD9..0xE6)
+        assertTrue(red(veil) < 30 && green(veil) < 40 && blue(veil) < 40)
     }
 
     @Test
@@ -132,14 +137,15 @@ class SpectrumRidgeTest {
         SpectrumRidge.smoothSpatial(src, dst, src.size)
         // Above the grass the column is copied. Averaging it with the floor made carriers vanish.
         assertEquals(0.90f, dst[2], 0.001f)
-        val wobble = floatArrayOf(0.16f, 0.02f, 0.18f)
+        val wobble = floatArrayOf(0.06f, 0.01f, 0.07f)
         val flat = FloatArray(3)
         SpectrumRidge.smoothSpatial(wobble, flat, 3)
         assertTrue(flat[1] > wobble[1])
         assertTrue(flat[1] < wobble[0])
         // A carrier is not blended down into the previous quiet row.
         assertEquals(0.80f, SpectrumRidge.smoothTemporal(0.8f, 0.05f), 0.001f)
-        assertTrue(SpectrumRidge.smoothTemporal(0.10f, 0.02f) in 0.04f..0.09f)
+        val blended = SpectrumRidge.smoothTemporal(0.05f, 0.01f)
+        assertTrue(blended > 0.02f && blended < 0.05f)
     }
 
     @Test
@@ -148,10 +154,9 @@ class SpectrumRidgeTest {
         val back = SpectrumRidge.fogArgb(SpectrumRidge.levelArgb(0.5f), age = SpectrumRidge.DEPTH - 1, SpectrumRidge.DEPTH)
         val frontSum = red(front) + green(front) + blue(front)
         val backSum = red(back) + green(back) + blue(back)
-        // The far row dims, and it stays about half as bright. Near-black fog hid the lawn.
-        assertTrue(backSum < frontSum)
-        assertTrue(backSum > frontSum * 0.45f)
-        assertTrue(backSum < frontSum * 0.60f)
+        // Front stays full. The oldest stroke keeps about a third, so the comb has depth.
+        assertTrue(backSum > frontSum * 0.28f)
+        assertTrue(backSum < frontSum * 0.42f)
         // Alpha stays solid. A transparent wall would show the ridge behind it.
         assertEquals(0xFF, (front ushr 24) and 0xFF)
         assertEquals(0xFF, (back ushr 24) and 0xFF)
@@ -200,23 +205,39 @@ class SpectrumRidgeTest {
     }
 
     @Test
-    fun aFullScopePaneAddsRowsAndRaisesThePeak() {
-        // A short combined pane keeps the usual depth. The spectrum-only pane is several
-        // times taller: it draws more ridges, and a full-scale peak is taller in pixels,
-        // while the peak fraction itself barely moves. The new height is rows, not a blow-up.
-        val short = 90f
-        val tall = 420f
-        assertEquals(SpectrumRidge.DEPTH, SpectrumRidge.rowsForHeight(short))
-        val tallRows = SpectrumRidge.rowsForHeight(tall)
-        assertTrue(tallRows > SpectrumRidge.DEPTH)
-        assertTrue(tallRows <= SpectrumRidge.MAX_DEPTH)
-        val shortLift = short * SpectrumRidge.amplitudeFor(short)
-        val tallLift = tall * SpectrumRidge.amplitudeFor(tall)
+    fun aTallPaneKeepsSixtyFourRowsAndOpensTheFrontGaps() {
+        // More rows fused into a sheet. Both panes draw the same sixty-four, and the
+        // gaps at the front are wider than the gaps at the back.
+        assertEquals(SpectrumRidge.DEPTH, SpectrumRidge.rowsForHeight(90f))
+        assertEquals(SpectrumRidge.DEPTH, SpectrumRidge.rowsForHeight(420f))
+        val depth = SpectrumRidge.DEPTH
+        val height = 400f
+        val frontGap = SpectrumRidge.projectY(0, depth, 0f, height) -
+            SpectrumRidge.projectY(1, depth, 0f, height)
+        val backGap = SpectrumRidge.projectY(depth - 2, depth, 0f, height) -
+            SpectrumRidge.projectY(depth - 1, depth, 0f, height)
+        assertTrue(frontGap > backGap * 1.4f)
+        val shortLift = 90f * SpectrumRidge.amplitudeFor(90f)
+        val tallLift = 420f * SpectrumRidge.amplitudeFor(420f)
         assertTrue(tallLift > shortLift * 3f)
-        assertTrue(SpectrumRidge.amplitudeFor(tall) - SpectrumRidge.amplitudeFor(short) < 0.12f)
-        val shortPeak = SpectrumRidge.projectY(0, SpectrumRidge.rowsForHeight(short), 1f, short, amplitude = SpectrumRidge.amplitudeFor(short))
-        val tallPeak = SpectrumRidge.projectY(0, tallRows, 1f, tall, amplitude = SpectrumRidge.amplitudeFor(tall))
-        assertTrue(tall - tallPeak > (short - shortPeak) * 3f)
+    }
+
+    @Test
+    fun theFloorSitsLowInThePane() {
+        // Top of the noise band, front row, default amplitude. The carpet was this
+        // sitting near a fifth of the pane. It has to stay a small wiggle.
+        val height = 400f
+        val level = SpectrumRidge.shapeDb(SpectrumRidge.GRASS_DB, SpectrumRidge.MIN_SPAN_DB)
+        val y = SpectrumRidge.projectY(
+            age = 0,
+            depth = SpectrumRidge.DEPTH,
+            level = level,
+            height = height,
+            amplitude = SpectrumRidge.amplitudeFor(height),
+        )
+        val fraction = (height - y) / height
+        assertTrue(fraction <= 0.15f)
+        assertTrue(fraction >= 0.04f)
     }
 
     @Test
