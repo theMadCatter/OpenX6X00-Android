@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import radio.kd0cq.x6100.ui.face.PENDING_FIRMWARE
@@ -24,10 +25,18 @@ import radio.kd0cq.x6100.ui.theme.RfGuru
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.provider.Settings
 import radio.kd0cq.x6100.net.LinkPhase
+import radio.kd0cq.x6100.service.BackgroundPreference
 import radio.kd0cq.x6100.ui.RadioViewModel
 
 /**
@@ -53,6 +62,7 @@ fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
         Text("Setup", style = MaterialTheme.typography.headlineSmall, color = RfGuru.gold)
 
         Text("Link", style = MaterialTheme.typography.titleMedium)
+        BackgroundSwitch()
         Line("panel", phase.name.lowercase())
         Line("tci", tciPhase.name.lowercase())
         Line("radio", endpoint?.let { "${it.name} ${it.host}:${it.panelPort} / ${it.tciPort}" } ?: "-")
@@ -114,6 +124,46 @@ fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
             style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+/**
+ * Keep the receiver up with the screen off. On until the operator turns it off.
+ *
+ * The system can still freeze a background app under battery optimization. This
+ * does not ask for an exemption on its own. The button opens the system list,
+ * where the operator can allow it if the radio drops out in Doze.
+ */
+@Composable
+private fun BackgroundSwitch() {
+    val context = LocalContext.current
+    val preference = remember { BackgroundPreference(context) }
+    var on by remember { mutableStateOf(preference.read()) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Run in background", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+            Text(
+                "Keep the radio link and the receiver playing when the screen is off. " +
+                    "An on-screen PTT is let go. Transmitting stays on the key you are holding.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(
+            checked = on,
+            onCheckedChange = { next ->
+                on = next
+                preference.write(next)
+            },
+        )
+    }
+    TextButton(onClick = {
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+    }) { Text("Battery optimization", color = RfGuru.gold) }
 }
 
 @Composable

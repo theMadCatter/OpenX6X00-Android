@@ -17,6 +17,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import radio.kd0cq.x6100.net.RadioLinks
+import radio.kd0cq.x6100.service.BackgroundPreference
+import radio.kd0cq.x6100.service.BackgroundRun
+import radio.kd0cq.x6100.service.RadioConnectionService
 import radio.kd0cq.x6100.service.RadioRigs
 import radio.kd0cq.x6100.ui.AppNav
 import radio.kd0cq.x6100.ui.RadioViewModel
@@ -52,24 +55,53 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Drawing again, and the mirror if the screen tab had asked for it. The locks
+        // come off in the service. A service that was never started is left alone.
+        BackgroundRun.drawScope.value = true
+        RadioLinks.link(application).resumePictures()
+        RadioConnectionService.enteredForeground(application)
+    }
+
     /**
-     * Off the air when the window goes away.
-     *
-     * A phone locked in a pocket, a call coming in, another app taking the screen: in all of them the
-     * operator is no longer looking at the PTT, and a transmitter nobody is watching is the failure
-     * this app is not allowed to have. The link stays up — the notification says so, and the receiver
-     * keeps playing — only the key and the microphone let go.
+     * The window is gone: the screen is off, or another app is in front.
      *
      * `onStop` and not `onPause`, because a split-screen or a floating window still has an operator
-     * looking at the radio, and the microphone is put back for them to use.
+     * looking at the radio.
+     *
+     * Background running is on unless the operator turned it off in Setup. On, the link and the
+     * receiver stay, the scope stops painting, and a finger that was on PTT is let up with no
+     * banner. The microphone stops because that release is the transmit machine's release.
+     * Off, this is the older path: the "went to the background" fail-safe, and the service stops.
+     *
+     * Rotation destroys this activity and creates another. That is not leaving. The rig lives
+     * on the application, and treating the gap as backgrounding used to unkey a live carrier
+     * and, when nothing was keyed, paint the banner on an idle radio.
      */
     override fun onStop() {
-        // Rotation destroys this activity and creates another. onStop runs in between, but the
-        // operator is still looking at the radio: the rig lives on the application, not here.
-        // Treating that as backgrounding unkeys a live carrier and, when nothing was keyed,
-        // still used to paint "this app went to the background".
         if (!isChangingConfigurations) {
-            RadioRigs.rig(application).ptt.wentToBackground()
+            val link = RadioLinks.link(application)
+            val rig = RadioRigs.rig(application)
+            val now = link.connection.value
+            val decision = BackgroundRun.onLeave(
+                configurationChange = false,
+                runInBackground = BackgroundPreference(application).read(),
+                connected = now.panel.online || now.tci.online,
+                touchPttHeld = rig.ptt.onAir,
+            )
+            // The banner path is the old fail-safe, and only when background running is off.
+            // A touch key while it is on uses release, which sends the up-command and does not
+            // publish "this app went to the background". The 3 second lease is still the radio's
+            // backstop if that write does not land. Nothing here keys the radio.
+            if (decision.announceWentToBackground) rig.ptt.wentToBackground()
+            else if (decision.releaseTouchPtt) rig.ptt.release()
+            if (decision.pausePictures) {
+                BackgroundRun.drawScope.value = false
+                link.pausePictures()
+            }
+            if (decision.stopService) RadioConnectionService.stop(application)
+            else RadioConnectionService.enteredBackground(application)
         }
         super.onStop()
     }

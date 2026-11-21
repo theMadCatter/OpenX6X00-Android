@@ -170,6 +170,14 @@ class RadioLink(
     @Volatile
     var screenFramesWanted: Boolean = false
 
+    /**
+     * The screen is off or another app is in front. [screenFramesWanted] stays as the
+     * operator left it, so coming back can ask again. While this is set, a new request
+     * is remembered and not sent: the radio should not start JPEGs into a pocket.
+     */
+    @Volatile
+    private var picturesPaused: Boolean = false
+
     init {
         collectPanel()
         collectFrames()
@@ -212,8 +220,32 @@ class RadioLink(
     /** Turn the radio's screen frames on or off for us, and tell it which picture it should send. */
     fun wantScreenFrames(on: Boolean, picture: PanelCommands.Picture? = null) {
         screenFramesWanted = on
+        // A backgrounded phone keeps the wish and does not ask. resumePictures sends it.
+        if (picturesPaused) return
         send(PanelCommands.screen(on))
         picture?.let { send(PanelCommands.picture(it)) }
+    }
+
+    /**
+     * Stop framebuffer JPEGs while nothing is drawing them.
+     *
+     * `screen 0` is the firmware's off switch (`PanelCommands.screen`). The scope
+     * itself is not a radio command: the pane stops collecting. This only tells
+     * the radio to stop the mirror. Called again, it does not send a second off.
+     */
+    fun pausePictures() {
+        if (picturesPaused) return
+        picturesPaused = true
+        // Only while the panel is up. A send with no socket writes "the radio is not reached"
+        // into the status line, which is not what leaving the screen means.
+        if (screenFramesWanted && _connection.value.panel.online) send(PanelCommands.screen(false))
+    }
+
+    /** Ask for the mirror again, if the screen tab still wanted it when we left. */
+    fun resumePictures() {
+        if (!picturesPaused) return
+        picturesPaused = false
+        if (screenFramesWanted && _connection.value.panel.online) send(PanelCommands.screen(true))
     }
 
     private fun collectPanel() {

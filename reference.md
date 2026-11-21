@@ -243,3 +243,16 @@ Spectrum only gives the trace or the ridges the room above the frequency scale a
 A taller spectrum pane does not blow the same 64 ridges up. `rowsForHeight` stays at 64 while the pane is the short combined strip, and climbs toward 128 (one row per about 3.5 px) when the spectrum has the whole scope. `amplitudeFor` keeps the peak fraction near 0.78 and adds at most 0.10, so the crest is taller in pixels and most of the new height is extra rows. The ring is allocated at 128 once.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **188 tests, 0 failures, 0 errors** (`scopeLayoutGivesTheWholeRoomToOnePane`, `aFullScopePaneAddsRowsAndRaisesThePeak`). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so the full-scope 3D view was not re-shot.
+
+## Background running (on by default)
+
+KD0CQ wants the Panel socket, the TCI socket and the receiver to keep going with the screen off. What the phone did before: `RadioConnectionService` was already a `connectedDevice` foreground service, and it did not drop the sockets when the activity stopped. `MainActivity.onStop` always called `wentToBackground()`, which unkeys and, if a carrier was up, paints "this app went to the background".
+
+What changed:
+
+- `Run in background` is a switch on Setup, stored as `run_in_background` in the `radio_face` preferences. Missing means on.
+- On: leaving the screen releases an on-screen PTT with `release()` (up-command, no banner). The microphone stops because that is the transmit machine's release. The 3 second lease is untouched and still the radio's backstop if the write does not land. Nothing keys from the background. The scope stops collecting frames. If the screen tab had asked for the mirror, the radio is sent `screen 0`, and `screen 1` again when the activity returns. The service takes a partial wake lock and a high-performance Wi-Fi lock only while it is in that background state and a socket is online. The notification shows frequency, mode and the S-meter caption, with Open and Stop. A killed process reconnects to the remembered host. Stop forgets the host.
+- Off: the old fail-safe (banner if a carrier was up) and the service stops, which closes both sockets. That is a disconnect. The previous onStop left the sockets up.
+- The service type is `connectedDevice`, plus `mediaPlayback` only while receiver audio is playing. Android 15 stops a media-playback foreground service that is not playing. There is no microphone type.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **196 tests, 0 failures, 0 errors** (`BackgroundRunTest`, 8). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so background audio was not heard on a device. Android can still freeze the process under battery optimization; Setup opens the system list and does not request the exemption itself.

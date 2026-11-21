@@ -167,7 +167,14 @@ class LeasePttController(
         publish(if (wasOnAir) reason else null)
     }
 
-    /** The app is going to the background: off the air, and the microphone back to the phone. */
+    /**
+     * Background running is off, and the screen is gone.
+     *
+     * Off the air, and the microphone back to the phone. The banner is this reason,
+     * and only when a carrier was actually up. When background running is on, the
+     * activity calls [release] instead, so a pocketed key still goes up and this
+     * line is not painted.
+     */
     fun wentToBackground() = failSafe("this app went to the background")
 
     /** The `TX_CHRONO` pacing, handed over by the audio pipeline that sees every frame. */

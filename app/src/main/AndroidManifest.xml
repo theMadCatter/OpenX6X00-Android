@@ -12,10 +12,15 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
-    <!-- The connection lives in a foreground service the user can see and stop -->
+    <!-- The connection lives in a foreground service the user can see and stop.
+         connectedDevice is the radio. mediaPlayback is the receiver, and only while it plays.
+         The wake lock and the Wi-Fi lock are taken only in the background, while a socket is up. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <!-- Transmitting: the microphone feeds the radio over TCI -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -48,10 +53,10 @@
             </intent-filter>
         </activity>
 
-        <!-- Owns the panel and TCI sockets while the app is used or transmitting -->
+        <!-- Owns the panel and TCI sockets, and the receiver, including with the screen off. -->
         <service
             android:name=".service.RadioConnectionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|mediaPlayback" />
     </application>
 </manifest>
