@@ -215,3 +215,19 @@ What changed:
 - PTT, the lease, and `PanelEventBus` were not touched. Closing full screen still leaves orientation alone.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **182 tests, 0 failures, 0 errors** (177, plus the five projection and ring tests in `SpectrumRidgeTest`). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so the ridges were not re-shot.
+
+## Solid 3D surface (after 215bf36)
+
+The emulator shot of `215bf36` is a thin teal mesh with the red VFO line through it. The cause is the fill: each ridge was painted black and only the crest was stroked, so the phone drew a wireframe. AetherSDR and the Yaesu FT-710 3DSS (the manual's "3-Dimension Spectrum Stream": X frequency, Y strength, Z time) are solid surfaces.
+
+What changed, and the choices:
+
+- Each column is now an opaque wall from that row's baseline up to the signal, coloured by level. Columns of one colour share a path (at most eight fills a row). No crest stroke: a stroke on the fill outline is what made the mesh. Nearer rows are drawn last, so they hide the rows behind them.
+- Farther rows are darker (`fogArgb`, gain down to about 0.38) and stay opaque. Transparency would let the back rows show through and bring the mesh back.
+- The trapezoid is stronger: inset 0.38, rise 0.66, amplitude 0.78, distance shrink 0.28. A carrier stays a ridge toward the back. Depth is 64 frames, 96 samples across.
+- The noise floor is the eased floor already subtracted, then a soft knee (`KNEE` 0.36). Below the knee the level squares down into a sheet about a fifth of full scale, so the quiet band is a smooth lawn. A 3-tap spatial pass flattens that sheet and keeps a sample that stands above both neighbours. A light blend with the older row (same span only) drops one-frame flicker. Both passes are 3D only.
+- Faint frequency lines run to the vanishing point, and a time line sits on the floor every sixteenth row.
+- Colour stays off the waterfall palette. The default is the AetherSDR lawn (deep teal, green, yellow, orange, red). A long-press on the scope chip switches to the FT-710 cyan-to-white stream and is stored next to the 2D/3D choice. The chip then reads `FT`. Tap still cycles 2D and 3D. 2D is still the default.
+- The red line in the shot is the VFO, drawn after the surface, and it stays. So do the scale, the band plan, the passband, drag-to-tune, and pinch-zoom. PTT, the lease, and `PanelEventBus` were not touched.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **186 tests, 0 failures, 0 errors** (`SpectrumRidgeTest` is 9: the knee, the peak-preserving smooth, the fog, and the FT-710 ramp). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so the solid surface was not re-shot.

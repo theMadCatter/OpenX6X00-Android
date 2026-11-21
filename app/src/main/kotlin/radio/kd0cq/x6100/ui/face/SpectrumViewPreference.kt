@@ -26,8 +26,16 @@ class SpectrumViewPreference(context: Context) {
         prefs.edit().putString(KEY, view.stored).apply()
     }
 
+    /** Aether lawn unless the operator long-pressed the chip for the FT-710 colours. */
+    fun readStyle(): RidgeStyle = RidgeStyle.fromStored(prefs.getString(KEY_STYLE, null))
+
+    fun writeStyle(style: RidgeStyle) {
+        prefs.edit().putString(KEY_STYLE, style.stored).apply()
+    }
+
     private companion object {
         const val FILE = "radio_face"
         const val KEY = "spectrum_view"
+        const val KEY_STYLE = "spectrum_style"
     }
 }

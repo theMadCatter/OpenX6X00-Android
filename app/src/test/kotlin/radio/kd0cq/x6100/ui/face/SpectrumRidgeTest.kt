@@ -74,18 +74,83 @@ class SpectrumRidgeTest {
     @Test
     fun colourRunsFromABlueGreenFloorToARedPeak() {
         val floor = SpectrumRidge.levelArgb(0f)
-        val mid = SpectrumRidge.levelArgb(0.5f)
+        val body = SpectrumRidge.levelArgb(0.45f)
         val peak = SpectrumRidge.levelArgb(1f)
+        // The floor is a deep teal sheet, darker than the green body. The crest is red.
         assertTrue(red(floor) < 40)
-        assertTrue(green(floor) > 80)
-        assertTrue(blue(floor) > 80)
+        assertTrue(green(floor) > red(floor))
+        assertTrue(blue(floor) > red(floor))
+        assertTrue(green(body) > green(floor) + 40)
         assertTrue(red(peak) > 220)
         assertTrue(green(peak) < 80)
-        assertTrue(red(mid) > red(floor))
-        assertTrue(red(peak) > red(mid))
+        assertTrue(red(peak) > red(body))
         assertEquals(0, SpectrumRidge.colorStep(0f))
         assertEquals(SpectrumRidge.COLOR_STEPS - 1, SpectrumRidge.colorStep(1f))
         assertEquals(SpectrumRidge.levelArgb(0f), SpectrumRidge.stepArgb(0))
+    }
+
+    @Test
+    fun ft710StyleIsCyanToWhiteAndTheChipNamesIt() {
+        val floor = SpectrumRidge.levelArgb(0f, RidgeStyle.FT710)
+        val peak = SpectrumRidge.levelArgb(1f, RidgeStyle.FT710)
+        assertTrue(blue(floor) > green(floor))
+        assertTrue(blue(floor) > red(floor))
+        assertTrue(red(peak) > 230 && green(peak) > 230 && blue(peak) > 230)
+        assertEquals(RidgeStyle.FT710, RidgeStyle.fromStored("ft710"))
+        assertEquals(RidgeStyle.AETHER, RidgeStyle.fromStored(null))
+        assertEquals(RidgeStyle.FT710, RidgeStyle.AETHER.next())
+        assertEquals("2D", SpectrumRidge.chipLabel(SpectrumView.TRACE, RidgeStyle.FT710))
+        assertEquals("3D", SpectrumRidge.chipLabel(SpectrumView.RIDGE, RidgeStyle.AETHER))
+        assertEquals("FT", SpectrumRidge.chipLabel(SpectrumView.RIDGE, RidgeStyle.FT710))
+    }
+
+    @Test
+    fun noiseCompressesToASheetAndASignalStandsUp() {
+        assertEquals(0f, SpectrumRidge.shapeLevel(0f), 0.001f)
+        // Inside the knee the wander is a small fraction of the sheet, not the raw level.
+        assertTrue(SpectrumRidge.shapeLevel(0.2f) < SpectrumRidge.shapeLevel(SpectrumRidge.KNEE))
+        assertTrue(SpectrumRidge.shapeLevel(0.2f) < 0.12f)
+        val sheet = SpectrumRidge.shapeLevel(SpectrumRidge.KNEE)
+        assertTrue(sheet in 0.15f..0.25f)
+        assertTrue(SpectrumRidge.shapeLevel(0.8f) > sheet + 0.35f)
+        assertTrue(SpectrumRidge.shapeLevel(1f) > 0.95f)
+        var previous = -1f
+        var raw = 0f
+        while (raw <= 1f) {
+            val shaped = SpectrumRidge.shapeLevel(raw)
+            assertTrue(shaped + 0.001f >= previous)
+            previous = shaped
+            raw += 0.05f
+        }
+    }
+
+    @Test
+    fun smoothingFlattensTheFloorAndKeepsAPeak() {
+        val src = floatArrayOf(0.10f, 0.12f, 0.90f, 0.11f, 0.10f)
+        val dst = FloatArray(src.size)
+        SpectrumRidge.smoothSpatial(src, dst, src.size)
+        assertTrue(dst[2] > 0.7f)
+        val wobble = floatArrayOf(0.20f, 0.02f, 0.22f)
+        val flat = FloatArray(3)
+        SpectrumRidge.smoothSpatial(wobble, flat, 3)
+        assertTrue(flat[1] > wobble[1])
+        assertTrue(flat[1] < wobble[0])
+        // A carrier present in both rows stays. A flicker is pulled down.
+        assertTrue(SpectrumRidge.smoothTemporal(0.8f, 0.8f) > 0.75f)
+        assertTrue(SpectrumRidge.smoothTemporal(0.8f, 0.05f) < 0.7f)
+    }
+
+    @Test
+    fun fartherRowsAreDarkerAndTheTrapezoidIsDeep() {
+        val front = SpectrumRidge.fogArgb(SpectrumRidge.levelArgb(0.5f), age = 0, SpectrumRidge.DEPTH)
+        val back = SpectrumRidge.fogArgb(SpectrumRidge.levelArgb(0.5f), age = SpectrumRidge.DEPTH - 1, SpectrumRidge.DEPTH)
+        assertTrue(red(front) + green(front) + blue(front) > red(back) + green(back) + blue(back) + 40)
+        // Alpha stays solid. A transparent wall would show the ridge behind it.
+        assertEquals(0xFF, (front ushr 24) and 0xFF)
+        assertEquals(0xFF, (back ushr 24) and 0xFF)
+        assertTrue(SpectrumRidge.INSET >= 0.34f)
+        assertTrue(SpectrumRidge.AMPLITUDE >= 0.7f)
+        assertEquals(64, SpectrumRidge.DEPTH)
     }
 
     @Test
