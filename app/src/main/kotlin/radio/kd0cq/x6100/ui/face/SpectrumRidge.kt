@@ -30,6 +30,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -100,17 +101,17 @@ enum class RidgeStyle(val stored: String, val chip: String) {
  * Perspective, level shaping, and colour of one ridge.
  *
  * [projectX] and [projectY] return floats so the canvas can fill a reused buffer.
- * Age 0 is the newest frame, full width along the bottom. Larger ages step up
- * and in a little. [RISE] puts the oldest baseline near the top of the pane, so
- * the surface fills it. [INSET] is small: the sides meet above the pane, which
- * is the modest perspective in AetherSDR, not a vanishing point drawn in the
- * black above the lawn. [AMPLITUDE] is how far a full-scale peak rises.
+ * Age 0 is the newest frame, full width along the bottom. Older ages step up
+ * and in a little, and [depthT] packs them closer together toward the back, so
+ * the comb stays readable: wide gaps in front, tight ones at the far edge.
+ * [RISE] puts the oldest baseline near the top of the pane. The line is the
+ * picture. The fill under it is a dark veil, not a coloured carpet.
  */
 object SpectrumRidge {
-    /** Frames drawn when the spectrum shares the pane with the waterfall. */
+    /** Frames drawn. The same count in the short strip and the full-scope pane. */
     const val DEPTH = 64
 
-    /** Frames the ring can hold when the spectrum has the whole pane. */
+    /** Frames the ring keeps. Drawing uses [DEPTH]; the extra slots are unused history. */
     const val MAX_DEPTH = 128
 
     /**
@@ -142,16 +143,31 @@ object SpectrumRidge {
     const val DISTANCE_SHRINK = 0.28f
 
     /**
-     * How much brightness the oldest row loses. Half, not a fade to black: the
-     * far lawn stays a lawn. Alpha stays opaque so a nearer wall still covers it.
+     * How much brightness the oldest stroke loses. The front row stays at full
+     * colour. The back row is about a third, so the comb reads as depth.
      */
-    const val FOG = 0.50f
+    const val FOG = 0.65f
 
-    /** dB above the eased floor that still counts as grass. A signal past this stands up. */
-    const val GRASS_DB = 8f
+    /**
+     * dB above the eased floor that is still noise. A signal past this is left
+     * unsmoothed, so a carrier stays a spike instead of a boil.
+     */
+    const val GRASS_DB = 6f
 
-    /** Height of the top of that grass, as a fraction of full scale. The dB inside it are kept. */
-    const val GRASS_HEIGHT = 0.22f
+    /**
+     * Height of the top of that noise, as a fraction of a full-scale peak.
+     * Small on purpose: the quiet band is a wiggle on the line, not a carpet.
+     */
+    const val GRASS_HEIGHT = 0.10f
+
+    /**
+     * Ages are not spaced evenly. Below 1, the first rows take more of the
+     * pane and the last rows squeeze together. 1 would be a ruler.
+     */
+    const val DEPTH_CURVE = 0.70f
+
+    /** Veil opacity, 0xE6 is 90%. Near enough to opaque that a nearer row hides the one behind it. */
+    const val VEIL_ALPHA = 0xE6
 
     /**
      * Quiet-band span, in dB. A few dB of noise then has visible height. A louder
@@ -163,15 +179,23 @@ object SpectrumRidge {
     const val GRID_ARGB = 0x5590C8BC.toInt()
 
     /**
-     * How many ridges to draw in a spectrum pane of [spectrumPx].
+     * How many ridges to draw. Always [DEPTH].
      *
-     * The combined pane is short, so it stays at [DEPTH]. A spectrum-only pane is the
-     * waterfall's height as well. That height adds rows, up to [MAX_DEPTH], instead of
-     * painting the same [DEPTH] ridges as thicker bands.
+     * A taller pane used to add rows until they touched and read as one sheet.
+     * Sixty-four lines, with [depthT] opening gaps at the front, stay a comb
+     * in both the short strip and the full-scope view. [spectrumPx] is unused
+     * and kept so the call site can still pass the pane.
      */
     fun rowsForHeight(spectrumPx: Float): Int {
-        if (spectrumPx <= 0f) return DEPTH
-        return (spectrumPx / 3.5f).roundToInt().coerceIn(DEPTH, MAX_DEPTH)
+        if (spectrumPx < 0f) return DEPTH
+        return DEPTH
+    }
+
+    /** 0 at the newest row, 1 at the oldest, compressed toward the back. */
+    fun depthT(age: Int, depth: Int): Float {
+        if (depth <= 1) return 0f
+        val u = age.coerceIn(0, depth - 1) / (depth - 1).toFloat()
+        return u.pow(DEPTH_CURVE)
     }
 
     /**
@@ -195,7 +219,7 @@ object SpectrumRidge {
         inset: Float = INSET,
     ): Float {
         if (width <= 0f || sampleCount <= 1 || depth <= 1) return 0f
-        val t = age.coerceIn(0, depth - 1) / (depth - 1).toFloat()
+        val t = depthT(age, depth)
         val side = width * inset * t
         val span = (width - 2f * side).coerceAtLeast(0f)
         val along = i.coerceIn(0, sampleCount - 1) / (sampleCount - 1).toFloat()
@@ -212,7 +236,7 @@ object SpectrumRidge {
         distanceShrink: Float = DISTANCE_SHRINK,
     ): Float {
         if (height <= 0f || depth <= 1) return height.coerceAtLeast(0f)
-        val t = age.coerceIn(0, depth - 1) / (depth - 1).toFloat()
+        val t = depthT(age, depth)
         val baseline = height * (1f - rise * t)
         val lift = height * amplitude * level.coerceIn(0f, 1f) * (1f - distanceShrink * t)
         return (baseline - lift).coerceIn(0f, height)
@@ -230,7 +254,7 @@ object SpectrumRidge {
     fun shapeDb(aboveFloorDb: Float, spanDb: Float): Float {
         val above = aboveFloorDb.coerceAtLeast(0f)
         val span = spanDb.coerceAtLeast(MIN_SPAN_DB)
-        val grass = GRASS_DB.coerceAtMost(span * 0.45f)
+        val grass = GRASS_DB.coerceAtMost(span * 0.5f)
         if (grass <= 0f) return if (above <= 0f) 0f else 1f
         if (above <= grass) return (above / grass) * GRASS_HEIGHT
         val t = ((above - grass) / (span - grass)).coerceIn(0f, 1f)
@@ -341,11 +365,19 @@ object SpectrumRidge {
     fun stepArgb(step: Int, style: RidgeStyle = RidgeStyle.AETHER): Int =
         levelArgb(step.coerceIn(0, COLOR_STEPS - 1) / (COLOR_STEPS - 1).toFloat(), style)
 
-    /** Farther rows are darker. Alpha stays opaque so the fill still hides what is behind it. */
+    /** Farther strokes are dimmer. The front row is unchanged. The oldest keeps about a third. */
     fun fogArgb(argb: Int, age: Int, depth: Int): Int {
         if (depth <= 1) return argb
-        val t = age.coerceIn(0, depth - 1) / (depth - 1).toFloat()
-        return scaleRgb(argb, 1f - FOG * t)
+        return scaleRgb(argb, 1f - FOG * depthT(age, depth))
+    }
+
+    /**
+     * The fill under one stroke. Dark, 90% opaque, with a slight tint so a nearer
+     * row hides the lines behind it without painting a coloured sheet.
+     */
+    fun veilArgb(style: RidgeStyle = RidgeStyle.AETHER): Int {
+        val rgb = if (style == RidgeStyle.FT710) 0x070E16 else 0x071412
+        return (VEIL_ALPHA shl 24) or rgb
     }
 
     /** The label on the scope chip. 2D, the Aether 3D, or the FT-710 style. */
@@ -373,18 +405,18 @@ object SpectrumRidge {
         return rgb
     }
 
-    private val AETHER_AT = floatArrayOf(0f, 0.08f, 0.20f, 0.42f, 0.68f, 1f)
+    private val AETHER_AT = floatArrayOf(0f, 0.16f, 0.38f, 0.58f, 0.78f, 1f)
 
     /**
-     * Bright green-cyan lawn, yellow tips, then orange and red. The floor stop
-     * is already a lawn colour: a dark teal there is what made the sheet look unlit.
+     * Teal-green on the noise, green through the middle, yellow, then orange-red
+     * on a real peak. The lime and chartreuse stops are what flooded the pane.
      */
-    private val AETHER_RGB = intArrayOf(0x2AD4A4, 0x7AF06A, 0xE6F25A, 0xFFE23A, 0xFF8A1A, 0xFF2E12)
+    private val AETHER_RGB = intArrayOf(0x1A7A68, 0x1E9A58, 0x3CB04A, 0xE0C42E, 0xF08818, 0xE83014)
 
-    private val FT_AT = floatArrayOf(0f, 0.16f, 0.38f, 0.68f, 1f)
+    private val FT_AT = floatArrayOf(0f, 0.22f, 0.48f, 0.74f, 1f)
 
-    /** Bright cyan lawn to a white crest. The FT-710 3DSS, without the navy floor. */
-    private val FT_RGB = intArrayOf(0x28B8E4, 0x6AD8F4, 0xC8F4FF, 0xF4FCFF, 0xFFFFFF)
+    /** Cyan strokes on the noise, running up to a white peak. The FT-710 3DSS. */
+    private val FT_RGB = intArrayOf(0x1A6A90, 0x38B0D4, 0x90E4F6, 0xE8F8FF, 0xFFFFFF)
 }
 
 /**

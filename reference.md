@@ -278,3 +278,19 @@ What changed, 3D only. The waterfall window, PTT, the lease, `PanelEventBus`, ba
 - No second-finger gain. Pinch already uses two fingers, and a drag tunes. The auto-range is the vertical control.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **197 tests, 0 failures, 0 errors**. `aCarrierThirtyDbAboveTheFloorReachesMostOfThePane` requires a +30 dB bin to rise at least 60% of the pane on the first range update. No emulator here, so this look was not re-shot.
+
+## 3D comb, after the 6a40873 emulator check
+
+Images of `6a40873`: the carrier stands up as a red ridge and the back edge fills the pane. Both of those stay. The rest overshot. Each column was an opaque wall in a bright green-cyan ramp, the noise band was 22% of full scale, and a tall pane added rows until they touched. That reads as a lime carpet with teal holes. AetherSDR is a comb: many thin strokes, a dark floor, and the colour on the strokes and the tips of the noise.
+
+What changed, 3D drawing only. PTT, the lease, `PanelEventBus`, background mode, and the layout preference are the same. The waterfall window is the same. The carrier test is the same.
+
+- Each row is a dark veil (the background, about 90% opaque, a slight teal or navy tint) and then a 1.25 dp stroke coloured along the line. The veil is what a nearer row uses to hide the one behind it. The stroke is the picture.
+- The noise band is the first 6 dB, drawn at 10% of a full-scale peak (`GRASS_HEIGHT` 0.10). On the default range that is about a tenth of the pane, under the new 15% ceiling. Peak-hold per column stays, so a one-bin carrier is still a ridge.
+- Colour runs teal-green, green, yellow, orange-red. The FT-710 style runs dark cyan to white. The lime and chartreuse stops are gone.
+- Fog is 0.65, and it follows the same perspective as the row position. The front stroke is full colour. The oldest keeps about 35%.
+- Row spacing uses `depthT` (`u` to the 0.70). The front gaps are wider than the back gaps. Both panes draw 64 rows. The earlier "a tall pane adds rows up to 128" behaviour is what fused the comb; the ring still holds 128 and the draw ignores the extra slots.
+- Smoothing still touches only the noise. A column more than 6 dB above the floor is copied, so a carrier does not boil.
+- The canvas paints a short black fade under the top chips. It is inside the canvas, so drag and pinch still hit the plot.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **198 tests, 0 failures, 0 errors**. `theFloorSitsLowInThePane` requires the top of the noise, at the default, to stay at or under 15% of the pane. `aTallPaneKeepsSixtyFourRowsAndOpensTheFrontGaps` replaces the test that asked a tall pane for more than 64 rows. No emulator here, so this comb was not re-shot.

@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -478,9 +479,10 @@ fun SpectrumStack(
     // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
     // row per pixel instead of stretching 48 rows into blocks.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
-    // The ring holds the full-scope depth. A combined pane only draws the front DEPTH rows.
+    // The ring keeps more frames than are drawn. Both panes draw the front DEPTH rows.
     val ridgeRing = remember { SpectrumRidgeRing(SpectrumRidge.MAX_DEPTH) }
     val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
+    val ridgeVeil = remember { Path() }
     val ridgeScratch = remember { RidgeScratch() }
     val leveler = remember { WaterfallLeveler() }
     // The 3D scale, not the waterfall's. A carrier has to be able to reach the top
@@ -642,6 +644,7 @@ fun SpectrumStack(
                 drawRidgePlot(
                     ring = ridgeRing,
                     fills = ridgeFills,
+                    veil = ridgeVeil,
                     scratch = ridgeScratch,
                     style = ridgeStyle,
                     specH = specH,
@@ -764,6 +767,17 @@ fun SpectrumStack(
                 val measured = measurer.measure(line, cwStyle)
                 drawText(measured, topLeft = Offset(6.dp.toPx(), size.height - 16.dp.toPx()))
             }
+            // The back rows sit under the chips. A short dark fade keeps the labels readable
+            // without a second hit target over the drag and pinch gestures.
+            val shade = 32.dp.toPx()
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent),
+                    startY = 0f,
+                    endY = shade,
+                ),
+                size = Size(size.width, shade),
+            )
         }
 
         Text(
@@ -855,20 +869,17 @@ fun SpectrumStack(
 }
 
 /**
- * Solid ridges, oldest first.
+ * A comb of ridge lines, oldest first.
  *
- * Each column is a wall from that row's baseline up to the signal, filled with the colour
- * of its level. Columns of one colour share a path, so a quiet row is one polygon and a
- * busy row is a handful, not a line per sample. The fill is opaque and fogged by age:
- * the nearer wall covers the one behind it, and the back of the stream is darker.
- *
- * On a mid-range phone this is about sixty rows times eight paths, once per spectrum
- * frame (the radio sends at most ~15 a second). The paths and the sample buffers are
- * the ones the pane allocated.
+ * Each row is a dark veil from its baseline up to the trace, then a thin stroke
+ * coloured by level. The veil is what hides the lines behind a nearer row. The
+ * stroke is what you read: teal-green noise, yellow and red where a carrier stands.
+ * Sixty-four rows, spaced wider at the front. The paths are the ones the pane allocated.
  */
 private fun DrawScope.drawRidgePlot(
     ring: SpectrumRidgeRing,
     fills: Array<Path>,
+    veil: Path,
     scratch: RidgeScratch,
     style: RidgeStyle,
     specH: Float,
@@ -881,15 +892,17 @@ private fun DrawScope.drawRidgePlot(
     if (specH < 2f || viewWidth < 2f || ring.count <= 0 || viewWidthHz <= 0) return
     val span = ceiling - floor
     val samples = scratch.x.size
-    // A tall spectrum-only pane draws more ridges, and a slightly taller peak fraction.
-    // Using the ring's full depth here would squash that history into the short combined pane.
+    // Always the same sixty-four. A taller pane opens the gaps; it does not add lines
+    // until they fuse into a sheet.
     val depth = SpectrumRidge.rowsForHeight(specH).coerceAtMost(ring.depth)
     val amplitude = SpectrumRidge.amplitudeFor(specH)
     val shown = minOf(ring.count, depth)
+    val strokePx = 1.25.dp.toPx()
+    val veilColor = packedArgb(SpectrumRidge.veilArgb(style))
     var haveOlder = false
     var olderCentre = 0
     var olderWidth = 0
-    // Oldest first. The opaque wall of a nearer ridge then covers what is behind it.
+    // Oldest first. A nearer veil then covers the lines that sit behind its stroke.
     for (age in shown - 1 downTo 0) {
         val row = ring.dbAt(age)
         val rowBins = ring.lengthAt(age)
@@ -923,9 +936,14 @@ private fun DrawScope.drawRidgePlot(
         olderCentre = rowCentre
         olderWidth = rowWidth
         val baseline = SpectrumRidge.projectY(age, depth, 0f, specH)
+        veil.rewind()
+        veil.moveTo(scratch.x[0], baseline)
+        for (k in 0 until samples) veil.lineTo(scratch.x[k], scratch.y[k])
+        veil.lineTo(scratch.x[samples - 1], baseline)
+        veil.close()
+        drawPath(veil, veilColor)
         for (path in fills) path.rewind()
-        // A run of columns that share a colour is one polygon: up the left side, along the
-        // crest, down the right side, and back along the baseline.
+        // One open run per colour, so the stroke follows the trace and does not fill it.
         var start = 0
         while (start < samples - 1) {
             val step = SpectrumRidge.colorStep(maxOf(scratch.level[start], scratch.level[start + 1]))
@@ -936,15 +954,14 @@ private fun DrawScope.drawRidgePlot(
                 end++
             }
             val path = fills[step]
-            path.moveTo(scratch.x[start], baseline)
-            for (k in start..end) path.lineTo(scratch.x[k], scratch.y[k])
-            path.lineTo(scratch.x[end], baseline)
-            path.close()
+            path.moveTo(scratch.x[start], scratch.y[start])
+            for (k in start + 1..end) path.lineTo(scratch.x[k], scratch.y[k])
             start = end
         }
+        val stroke = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round)
         for (step in fills.indices) {
             val color = SpectrumRidge.fogArgb(SpectrumRidge.stepArgb(step, style), age, depth)
-            drawPath(fills[step], packedArgb(color))
+            drawPath(fills[step], packedArgb(color), style = stroke)
         }
     }
     drawRidgeGrid(samples, depth, viewWidth, specH)
