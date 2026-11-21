@@ -287,6 +287,12 @@ class SpectrumRidgeTest {
         assertTrue(red(mid) < green(mid) + 40)
         val peak = SpectrumRidge.levelArgb(1f)
         assertTrue(red(peak) > green(peak) + 80)
+        val noise = SpectrumRidge.bladeTexture(0, 0.05f)
+        assertEquals(noise, SpectrumRidge.bladeTexture(0, 0.05f), 0.0001f)
+        assertEquals(0f, SpectrumRidge.bladeTexture(4, 0.5f), 0.0001f)
+        assertTrue(kotlin.math.abs(noise) <= 0.05f * 0.26f)
+        val samples = (0 until 12).map { SpectrumRidge.bladeTexture(it, 0.05f) }
+        assertTrue(samples.max() - samples.min() > 0.005f)
     }
 
     @Test

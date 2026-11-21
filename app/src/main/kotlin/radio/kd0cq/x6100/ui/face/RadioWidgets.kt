@@ -1056,8 +1056,15 @@ private fun DrawScope.drawRidgePlot(
                 baked, rowBins, i, samples, viewCentreHz, viewWidthHz, rowCentre, rowWidth,
             )
             scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth, curve = curve)
+            // Noise blades differ by column. The offset is fixed for that column, and a
+            // signal is not moved, so the carrier and the frozen rows stay put.
+            val drawn = if (aether) {
+                (scratch.level[i] + SpectrumRidge.bladeTexture(i, scratch.level[i])).coerceAtLeast(0f)
+            } else {
+                scratch.level[i]
+            }
             scratch.y[i] = SpectrumRidge.projectY(
-                age, depth, scratch.level[i], specH, rise = rise, amplitude = amplitude, curve = curve,
+                age, depth, drawn, specH, rise = rise, amplitude = amplitude, curve = curve,
             )
         }
         val baseline = SpectrumRidge.projectY(age, depth, 0f, specH, rise = rise, curve = curve)

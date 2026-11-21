@@ -329,6 +329,10 @@ Landscape spectrum-only left a bright lawn on the bottom and a dark void above i
 
 `theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
 
+## Blade texture
+
+Noise blades were one height, so the field looked flat. Each column now adds a fixed fraction of its own level, at most a quarter of that blade. A level above the grass is not moved, so the carrier stays a clean peak and a scrolled row does not change shape. The shortened blade is still several times the row pitch, so the floor stays covered.
+
 ## QRZ logger
 
 `remote_server.c` writes a QSO with `log` / `logq ID CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY` and answers `logged ID ok|no`. That line has no time column, so the time is only in the local Room table. QRZ is the public XML API. The username and password go in EncryptedSharedPreferences and are not logged. A session error or a call with no name and no grid is shown as a limited record. Distance and bearing use the operator's grid. The map is a canvas, with no tile server. ADIF leaves through the share sheet.
