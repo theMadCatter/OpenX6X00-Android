@@ -51,6 +51,7 @@ import radio.kd0cq.x6100.log.StationPlace
 import radio.kd0cq.x6100.log.toEntity
 import radio.kd0cq.x6100.log.toQso
 import radio.kd0cq.x6100.service.RadioConnectionService
+import radio.kd0cq.x6100.ui.face.RidgeHold
 import radio.kd0cq.x6100.service.RadioRigs
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -96,6 +97,13 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     val receipts: StateFlow<List<LoggedReceipt>> = link.receipts
     val sessions: StateFlow<List<SessionInfo>> = link.sessions
     val spectrum: StateFlow<SpectrumFrame?> = link.spectrum
+
+    /**
+     * Baked 3D rows. Owned here so a configuration change keeps them. The pane
+     * projects this same ring into whatever size it measured. Nothing in
+     * [RidgeHold.accept] allocates a buffer.
+     */
+    val ridgeHold = RidgeHold()
 
     /**
      * Local QSOs. The radio's `logq` is a second write of the same text. The password for

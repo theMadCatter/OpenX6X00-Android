@@ -292,6 +292,7 @@ private fun LandscapeOperating(
                 if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
             },
             waterfallShare = 0.73f,
+            ridgeHold = viewModel.ridgeHold,
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
@@ -498,6 +499,7 @@ private fun PortraitOperating(
                     onZoom = { narrower ->
                         if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
                     },
+                    ridgeHold = viewModel.ridgeHold,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
             }

@@ -329,6 +329,12 @@ Landscape spectrum-only left a bright lawn on the bottom and a dark void above i
 
 `theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
 
+## 3D history across rotation
+
+The ring lived in `remember` inside the spectrum pane. Portrait and landscape are different branches, so a rotation disposed the pane and allocated an empty ring. Draw still projected ages against all 128 rows, which parks a short history in a thin band at the bottom until the radio sends another full field. `RidgeHold` is on the view model. The pane projects that same ring into the new size. A repeated sequence does not scroll the rows. `theRidgeHistoryStaysFullWhenThePaneComesBack` fills the ring, collects the current frame again, and requires the oldest bake and the count to still be there.
+
+The noise-blade grain is 0.90 of the blade instead of half of that. A signal is still unmoved. The shortest noise blade still covers more than four front pitches.
+
 ## Spectrum view across rotation
 
 Portrait and landscape each kept the 2D / 3D chip in `rememberSaveable`. Those are different places in the tree, so the landscape pane restored the 2D it first composed, while `radio_face` `spectrum_view` already held `3d`. The chip then read 2D on a spectrum-only landscape face even though portrait was FT 3D. The layout preference could still say spectrum, which is why the waterfall was gone and the trace was 2D.

@@ -9,6 +9,7 @@ package radio.kd0cq.x6100.ui.face
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -325,9 +326,45 @@ class SpectrumRidgeTest {
         val noise = SpectrumRidge.bladeTexture(0, 0.05f)
         assertEquals(noise, SpectrumRidge.bladeTexture(0, 0.05f), 0.0001f)
         assertEquals(0f, SpectrumRidge.bladeTexture(4, 0.5f), 0.0001f)
-        assertTrue(kotlin.math.abs(noise) <= 0.05f * 0.26f)
-        val samples = (0 until 12).map { SpectrumRidge.bladeTexture(it, 0.05f) }
-        assertTrue(samples.max() - samples.min() > 0.005f)
+        val swing = 0.5f * SpectrumRidge.BLADE_GRAIN
+        assertTrue(kotlin.math.abs(noise) <= 0.05f * swing + 0.0001f)
+        val samples = (0 until 64).map { SpectrumRidge.bladeTexture(it, SpectrumRidge.GRASS_HEIGHT) }
+        assertTrue(samples.max() - samples.min() > 0.01f)
+        // The shortest noise blade still covers several row pitches.
+        val worst = SpectrumRidge.GRASS_HEIGHT - samples.maxOf { kotlin.math.abs(it) }
+        val gap = SpectrumRidge.projectY(0, depth, 0f, height, curve = curve) -
+            SpectrumRidge.projectY(1, depth, 0f, height, curve = curve)
+        val shortBlade = height * SpectrumRidge.amplitudeFor(height) * worst
+        assertTrue(shortBlade > gap * 4f)
+    }
+
+    @Test
+    fun theRidgeHistoryStaysFullWhenThePaneComesBack() {
+        // A rotation used to allocate a new ring. Count went to zero, and the
+        // ages that remained were projected against the full depth, so the
+        // grass sat in a thin band until another 128 frames arrived.
+        val hold = RidgeHold()
+        val centre = 14_100_000
+        val width = 48_000
+        repeat(SpectrumRidge.GRASS_ROWS) { i ->
+            val db = ByteArray(32) { -100 }
+            db[0] = (-120 + (i % 20)).toByte()
+            hold.accept(db, db.size, centre, width, i.toLong())
+        }
+        assertEquals(SpectrumRidge.GRASS_ROWS, hold.ring.count)
+        val oldest = hold.ring.bakedAt(SpectrumRidge.GRASS_ROWS - 1).copyOf()
+        val sameRing = hold.ring
+        // The pane is composed again and collects the frame it already baked.
+        hold.accept(ByteArray(32) { -100 }, 32, centre, width, (SpectrumRidge.GRASS_ROWS - 1).toLong())
+        assertSame(sameRing, hold.ring)
+        assertEquals(SpectrumRidge.GRASS_ROWS, hold.ring.count)
+        for (i in oldest.indices) {
+            assertEquals(oldest[i], hold.ring.bakedAt(SpectrumRidge.GRASS_ROWS - 1)[i], 0.0001f)
+        }
+        // A full count is what the new pane projects. The span is the horizon,
+        // not the bottom sliver a short count would occupy.
+        assertTrue(SpectrumRidge.fieldSpanFraction(900f, 520f) >= 0.90f)
+        assertTrue(SpectrumRidge.fieldSpanFraction(400f, 780f) >= 0.90f)
     }
 
     @Test
