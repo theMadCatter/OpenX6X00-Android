@@ -647,16 +647,14 @@ fun SpectrumStack(
     val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
     var mapName by rememberSaveable { mutableStateOf(WfColormap.GAUSS.name) }
-    // The preference is the copy that survives a new process. rememberSaveable covers rotation,
-    // which can happen before the preference write has been read back.
+    // One choice for both faces. A rememberSaveable here was a second copy, keyed
+    // by this pane's place in the tree, so the landscape face restored 2D after
+    // portrait had stored FT 3D in radio_face. The activity loads that file into
+    // [SpectrumChoices] before the first frame, and again on configuration change.
     val context = LocalContext.current
-    val viewPreference = remember { SpectrumViewPreference(context) }
-    var viewStored by rememberSaveable { mutableStateOf(viewPreference.read().stored) }
-    var styleStored by rememberSaveable { mutableStateOf(viewPreference.readStyle().stored) }
-    var layoutStored by rememberSaveable { mutableStateOf(viewPreference.readLayout().stored) }
-    val spectrumView = SpectrumView.fromStored(viewStored)
-    val ridgeStyle = RidgeStyle.fromStored(styleStored)
-    val scopeLayout = ScopeLayout.fromStored(layoutStored)
+    val spectrumView by SpectrumChoices.view.collectAsState()
+    val ridgeStyle by SpectrumChoices.style.collectAsState()
+    val scopeLayout by SpectrumChoices.layout.collectAsState()
     val ridge = spectrumView == SpectrumView.RIDGE
     val colormap = WfColormap.entries.firstOrNull { it.name == mapName } ?: WfColormap.GAUSS
     val colors = remember(colormap) { WaterfallDisplay.palette(colormap) }
@@ -997,19 +995,15 @@ fun SpectrumStack(
                     .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
                     .combinedClickable(
                         onClick = {
-                            val next = spectrumView.next()
-                            viewStored = next.stored
-                            viewPreference.write(next)
+                            SpectrumChoices.selectView(context, spectrumView.next())
                         },
                         onLongClick = {
                             // The second 3D colour. Holding the chip swaps the lawn for the
                             // FT-710 cyan stream, and opens 3D if the trace was showing.
-                            val next = ridgeStyle.next()
-                            styleStored = next.stored
-                            viewPreference.writeStyle(next)
+                            // The view write is the same store the other orientation reads.
+                            SpectrumChoices.selectStyle(context, ridgeStyle.next())
                             if (spectrumView == SpectrumView.TRACE) {
-                                viewStored = SpectrumView.RIDGE.stored
-                                viewPreference.write(SpectrumView.RIDGE)
+                                SpectrumChoices.selectView(context, SpectrumView.RIDGE)
                             }
                         },
                     )
@@ -1026,9 +1020,8 @@ fun SpectrumStack(
                 modifier = Modifier
                     .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
                     .clickable {
-                        val next = scopeLayout.next()
-                        layoutStored = next.stored
-                        viewPreference.writeLayout(next)
+                        // Layout only. The 2D / 3D choice is a different preference.
+                        SpectrumChoices.selectLayout(context, scopeLayout.next())
                     }
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .semantics {

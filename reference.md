@@ -329,6 +329,12 @@ Landscape spectrum-only left a bright lawn on the bottom and a dark void above i
 
 `theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
 
+## Spectrum view across rotation
+
+Portrait and landscape each kept the 2D / 3D chip in `rememberSaveable`. Those are different places in the tree, so the landscape pane restored the 2D it first composed, while `radio_face` `spectrum_view` already held `3d`. The chip then read 2D on a spectrum-only landscape face even though portrait was FT 3D. The layout preference could still say spectrum, which is why the waterfall was gone and the trace was 2D.
+
+`SpectrumMemory` is the one choice. `SpectrumChoices` loads it from the three preference strings before the first frame and on configuration change. The layout chip writes only the layout. `theSelectedViewSurvivesRotationAndEveryLayout` reads the stored strings into a new memory and walks every layout without the view leaving FT 3D.
+
 ## Rotation layout
 
 The side rail and the bottom bar were two navigation hosts, and the rail was chosen from `Configuration.orientation`. That flag changes before the window size does. On the way from landscape to portrait the new host was the portrait scaffold, while the face still measured a wide pane and kept the landscape deck. The keys ended up under the band plan, and the bottom bar and PTT were not on screen until the window finished resizing. There is one host now. `RadioFace.wideWindow` is the window width against its height, published as `LocalWideWindow`, and both the chrome and the face read it. A zero or unfinished size stays on the portrait face. `theWindowAspectPicksTheOperatingFace` covers a wide pane, a tall pane, a square, and an unfinished size.

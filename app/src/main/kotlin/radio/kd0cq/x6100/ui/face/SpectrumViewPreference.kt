@@ -9,6 +9,8 @@
 package radio.kd0cq.x6100.ui.face
 
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * The spectrum view the operator left selected.
@@ -45,5 +47,58 @@ class SpectrumViewPreference(context: Context) {
         const val KEY = "spectrum_view"
         const val KEY_STYLE = "spectrum_style"
         const val KEY_LAYOUT = "spectrum_layout"
+    }
+}
+
+/**
+ * The one spectrum choice both faces read.
+ *
+ * [load] runs from the activity before the first frame, and again after a
+ * configuration change. It applies the three strings in `radio_face`. It does
+ * not invent a 2D default when `spectrum_view` is already `3d`. The chip writes
+ * through here, so a layout change cannot leave a second copy of the view behind.
+ */
+object SpectrumChoices {
+    private val memory = SpectrumMemory()
+    private val _view = MutableStateFlow(memory.view)
+    private val _style = MutableStateFlow(memory.style)
+    private val _layout = MutableStateFlow(memory.layout)
+
+    val view: StateFlow<SpectrumView> = _view
+    val style: StateFlow<RidgeStyle> = _style
+    val layout: StateFlow<ScopeLayout> = _layout
+
+    fun load(context: Context) {
+        val prefs = SpectrumViewPreference(context)
+        memory.applyStored(
+            prefs.read().stored,
+            prefs.readStyle().stored,
+            prefs.readLayout().stored,
+        )
+        publish()
+    }
+
+    fun selectView(context: Context, next: SpectrumView) {
+        memory.selectView(next)
+        SpectrumViewPreference(context).write(next)
+        _view.value = memory.view
+    }
+
+    fun selectStyle(context: Context, next: RidgeStyle) {
+        memory.selectStyle(next)
+        SpectrumViewPreference(context).writeStyle(next)
+        _style.value = memory.style
+    }
+
+    fun selectLayout(context: Context, next: ScopeLayout) {
+        memory.selectLayout(next)
+        SpectrumViewPreference(context).writeLayout(next)
+        _layout.value = memory.layout
+    }
+
+    private fun publish() {
+        _view.value = memory.view
+        _style.value = memory.style
+        _layout.value = memory.layout
     }
 }
