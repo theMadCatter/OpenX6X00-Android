@@ -22,6 +22,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.PowerManager
 import android.os.SystemClock
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import radio.kd0cq.x6100.R
 import radio.kd0cq.x6100.net.LinkPhase
+import radio.kd0cq.x6100.net.PanelMode
 import radio.kd0cq.x6100.net.PANEL_PORT
 import radio.kd0cq.x6100.net.RadioEndpoint
 import radio.kd0cq.x6100.net.RadioLink
@@ -63,6 +65,7 @@ class RadioConnectionService : LifecycleService() {
         RadioRigs.rig(this)
         watchState()
         watchSpots()
+        watchAlerts()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -84,6 +87,21 @@ class RadioConnectionService : LifecycleService() {
             ACTION_FOREGROUND -> {
                 inBackground = false
                 locks.drop()
+                return START_STICKY
+            }
+            ACTION_QUICK -> {
+                val which = intent.getStringExtra(EXTRA_WHICH).orEmpty()
+                val radio = link.state.value
+                val line = QuickKeys.command(
+                    action = which,
+                    mode = radio?.mode ?: 0,
+                    modeCount = PanelMode.entries.size,
+                    att = radio?.att ?: 0,
+                    pre = radio?.preOn == true,
+                    nb = radio?.noiseBlankerOn == true,
+                    nr = radio?.noiseReduceOn == true,
+                )
+                if (line != null) link.send(line)
                 return START_STICKY
             }
         }
@@ -200,6 +218,39 @@ class RadioConnectionService : LifecycleService() {
         }
     }
 
+    /** Battery from `bat`, SWR from the `t` meter, and only while that meter is a transmit. */
+    private fun watchAlerts() {
+        lifecycleScope.launch {
+            var lastBattery = 0L
+            var lastSwr = 0L
+            combine(link.state, link.txMeters) { state, tx -> state to tx }.collect { (state, tx) ->
+                val prefs = AlertPrefs(this@RadioConnectionService)
+                val now = SystemClock.elapsedRealtime()
+                if (RadioAlerts.lowBattery(state?.battery, prefs.battery()) && RadioAlerts.due(now, lastBattery)) {
+                    lastBattery = now
+                    postAlert("Battery ${state?.battery}%", "Below the ${prefs.battery()}% mark")
+                }
+                if (RadioAlerts.highSwr(tx.swr, prefs.swr(), state?.transmitting == true) && RadioAlerts.due(now, lastSwr)) {
+                    lastSwr = now
+                    postAlert("High SWR", String.format("%.1f:1", tx.swr))
+                }
+            }
+        }
+    }
+
+    private fun postAlert(title: String, text: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(ALERT_CHANNEL, "Radio alerts", NotificationManager.IMPORTANCE_HIGH)
+        manager.createNotificationChannel(channel)
+        val note = NotificationCompat.Builder(this, ALERT_CHANNEL)
+            .setSmallIcon(R.drawable.ic_radio)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .build()
+        manager.notify(ALERT_ID, note)
+    }
+
     /** Wake and Wi-Fi only for the case [BackgroundRun.wantLocks] names. */
     private fun applyLocks() {
         if (BackgroundRun.wantLocks(prefs.read(), connected(), inBackground)) locks.hold()
@@ -289,10 +340,24 @@ class RadioConnectionService : LifecycleService() {
             Intent(this, RadioConnectionService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val shown = line.ifBlank { fallback(phase) }
+        val quick = RemoteViews(packageName, R.layout.notif_quick)
+        quick.setTextViewText(R.id.quick_line, shown)
+        quick.setOnClickPendingIntent(R.id.quick_band_down, quickIntent(QuickKeys.BAND_DOWN, 10))
+        quick.setOnClickPendingIntent(R.id.quick_band_up, quickIntent(QuickKeys.BAND_UP, 11))
+        quick.setOnClickPendingIntent(R.id.quick_mode, quickIntent(QuickKeys.MODE, 12))
+        quick.setOnClickPendingIntent(R.id.quick_vol_down, quickIntent(QuickKeys.VOL_DOWN, 13))
+        quick.setOnClickPendingIntent(R.id.quick_vol_up, quickIntent(QuickKeys.VOL_UP, 14))
+        quick.setOnClickPendingIntent(R.id.quick_att, quickIntent(QuickKeys.ATT, 15))
+        quick.setOnClickPendingIntent(R.id.quick_pre, quickIntent(QuickKeys.PRE, 16))
+        quick.setOnClickPendingIntent(R.id.quick_nb, quickIntent(QuickKeys.NB, 17))
+        quick.setOnClickPendingIntent(R.id.quick_nr, quickIntent(QuickKeys.NR, 18))
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_radio)
             .setContentTitle(getString(R.string.notif_title))
-            .setContentText(line.ifBlank { fallback(phase) })
+            .setContentText(shown)
+            .setCustomContentView(quick)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setOngoing(phase != LinkPhase.STOPPED)
             .setContentIntent(open)
             .addAction(0, getString(R.string.notif_open), open)
@@ -300,6 +365,17 @@ class RadioConnectionService : LifecycleService() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
+
+    /** A shade button. The extra is a quick-key name, never PTT. */
+    private fun quickIntent(which: String, request: Int): PendingIntent =
+        PendingIntent.getService(
+            this,
+            request,
+            Intent(this, RadioConnectionService::class.java)
+                .setAction(ACTION_QUICK)
+                .putExtra(EXTRA_WHICH, which),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
     private fun fallback(phase: LinkPhase): String = when (phase) {
         LinkPhase.CONNECTING -> getString(R.string.notif_connecting)
@@ -343,9 +419,13 @@ class RadioConnectionService : LifecycleService() {
         private const val CHANNEL = "radio-link"
         private const val HUNTER_CHANNEL = "spot-hunter"
         private const val HUNTER_ID = 0x6101
+        private const val ALERT_CHANNEL = "radio-alerts"
+        private const val ALERT_ID = 0x6102
         private const val NOTIFICATION_ID = 0x6100
 
         const val ACTION_STOP = "radio.kd0cq.x6100.action.STOP"
+        private const val ACTION_QUICK = "radio.kd0cq.x6100.action.QUICK"
+        private const val EXTRA_WHICH = "which"
         private const val ACTION_BACKGROUND = "radio.kd0cq.x6100.action.BACKGROUND"
         private const val ACTION_FOREGROUND = "radio.kd0cq.x6100.action.FOREGROUND"
         private const val EXTRA_HOST = "host"
