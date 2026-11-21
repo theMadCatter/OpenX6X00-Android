@@ -257,6 +257,22 @@ object RadioFace {
         return Triple(sign + bits[0], bits[1], bits[2])
     }
 
+    /**
+     * Sp size for [text] so the whole readout, including the +/− column, fits in the slot.
+     *
+     * A fixed size overflowed the landscape header and the row clipped everything after "14".
+     * Monospace advance is taken as 0.62 em, a little wider than the font, so the last digit
+     * stays inside the slot. The height of the slot caps the size; a wide slot still grows
+     * past the old 20 sp gold text.
+     */
+    fun frequencyTextSp(widthDp: Float, heightDp: Float, text: String): Float {
+        val advance = 0.62f
+        val chars = text.length.coerceAtLeast(1) + 1.5f
+        val fromWidth = if (widthDp <= 0f) 28f else widthDp / (chars * advance)
+        val fromHeight = if (heightDp <= 0f) fromWidth else heightDp * 0.78f
+        return minOf(fromWidth, fromHeight).coerceIn(12f, 36f)
+    }
+
     fun bandLabel(freqHz: Int, bands: List<Band>): String {
         fun pick(list: List<Band>): Band? =
             list.filter { it.name.isNotBlank() && freqHz in it.startHz..it.stopHz }

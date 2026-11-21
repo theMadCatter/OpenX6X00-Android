@@ -33,6 +33,25 @@ class RadioFaceTest {
     }
 
     @Test
+    fun frequencyDigitsFitTheSlotTheyAreGiven() {
+        // 14.100.000 is the string the header dropped after "14". The size is chosen from the
+        // slot, and the whole string, plus room for the +/− column, has to stay inside that width.
+        val text = RadioFace.formatFrequency(14_100_000)
+        assertEquals("14.100.000", text)
+        assertTrue(text.endsWith(".100.000"))
+        assertEquals(Triple("14", "100", "000"), RadioFace.frequencyParts(14_100_000))
+        val advance = 0.62f
+        val chars = text.length + 1.5f
+        val wide = RadioFace.frequencyTextSp(360f, 40f, text)
+        assertTrue("wide slot should be at least the old 20 sp gold text, was $wide", wide >= 20f)
+        assertTrue(chars * advance * wide <= 360f + 0.05f)
+        val tight = RadioFace.frequencyTextSp(100f, 40f, text)
+        assertTrue(chars * advance * tight <= 100f + 0.05f)
+        assertTrue(tight < wide)
+        assertTrue(tight >= 12f)
+    }
+
+    @Test
     fun bandNamePrefersTheRadiosList() {
         val named = listOf(Band("20m CW", 14_000_000, 14_070_000), Band("20m", 14_000_000, 14_350_000))
         assertEquals("20m CW", RadioFace.bandLabel(14_050_000, named))

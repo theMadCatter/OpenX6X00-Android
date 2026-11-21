@@ -263,6 +263,20 @@ object WaterfallDisplay {
     }
 
     /**
+     * Which history row paints pixel [y]. Newest is 0.
+     *
+     * One row per pixel once the history is as tall as the pane. Fewer rows than pixels are
+     * stretched so the pane is full: leaving the bottom at the darkest palette stop is the empty
+     * band under a short history. The last pixel is the oldest row that is actually drawn.
+     */
+    fun historyRowAt(y: Int, height: Int, rowCount: Int): Int {
+        if (height <= 0 || rowCount <= 0) return 0
+        val shown = minOf(rowCount, height)
+        val index = ((y.coerceAtLeast(0).toLong() * shown) / height).toInt()
+        return index.coerceIn(0, shown - 1)
+    }
+
+    /**
      * Sharp is what we ask for. The radio repeats an unchanged screen about once a second
      * (STILL_MS), and that gap is not a slow link. A run of gaps that are neither a still
      * repeat nor a moving frame (the encoder skips a frame while the last JPEG is still queued)

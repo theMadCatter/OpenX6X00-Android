@@ -23,6 +23,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,10 +31,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -80,7 +79,6 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.flow.StateFlow
@@ -93,9 +91,10 @@ import radio.kd0cq.x6100.ui.theme.RfGuru
 import radio.kd0cq.x6100.ui.theme.packedArgb
 
 /**
- * One bitmap at the view's pixel size. Rows are painted 1:1, each pixel interpolated between
- * the FFT bins at that frequency, so the bitmap is never a narrow strip that the canvas then
- * stretches into blocks. The same bitmap is rewritten as frames arrive; a new one is made only
+ * One bitmap at the view's pixel size. Each pixel is interpolated between the FFT bins at that
+ * frequency, so the bitmap is never a narrow strip that the canvas then stretches into blocks.
+ * A short history is stretched down the pane (see [WaterfallDisplay.historyRowAt]) until there
+ * is a row per pixel. The same bitmap is rewritten as frames arrive; a new one is made only
  * when the pane changes size.
  */
 private class WaterfallSheet {
@@ -122,11 +121,13 @@ private class WaterfallSheet {
         val need = width * height
         if (pixels.size != need) pixels = IntArray(need)
         val blank = colors.first()
-        val shown = min(rows.size, height)
+        // Stretch a short history so every pixel of the pane is a row. A 1:1 map left the
+        // bottom half black until a row had arrived for every pixel, which a 10-frame
+        // stream does not do in the time the operator is looking at it.
         for (y in 0 until height) {
             val offset = y * width
-            val row = if (y < shown) rows[y] else null
-            if (row == null || row.db.isEmpty() || row.widthHz <= 0 || view.widthHz <= 0) {
+            val row = rows[WaterfallDisplay.historyRowAt(y, height, rows.size)]
+            if (row.db.isEmpty() || row.widthHz <= 0 || view.widthHz <= 0) {
                 pixels.fill(blank, offset, offset + width)
                 continue
             }
@@ -355,25 +356,43 @@ fun FrequencyReadout(
     textSize: androidx.compose.ui.unit.TextUnit? = null,
 ) {
     val parts = RadioFace.frequencyParts(freqHz)
-    // Segment digits, not a proportional face. The landscape header passes an explicit size so
-    // the +/− pair stays on one line and does not steal a row from the waterfall.
-    val digitH = when {
-        textSize != null && textSize.value <= 22f -> 22.dp
-        large -> 34.dp
-        else -> 28.dp
-    }
-    val bump = if (textSize != null) 12.sp else 14.sp
-    val lit = RfGuru.goldText
-    val dim = RfGuru.text
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        FreqPart(parts.first, group == FreqGroup.MHZ, digitH, lit, dim) { onGroup(FreqGroup.MHZ) }
-        SegmentGlyph('.', lit, digitH)
-        FreqPart(parts.second, group == FreqGroup.KHZ, digitH, lit, dim) { onGroup(FreqGroup.KHZ) }
-        SegmentGlyph('.', lit, digitH)
-        FreqPart(parts.third, group == FreqGroup.HZ, digitH, lit, dim) { onGroup(FreqGroup.HZ) }
-        Column(Modifier.padding(start = 4.dp)) {
-            Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(1) })
-            Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(-1) })
+    val readout = RadioFace.formatFrequency(freqHz)
+    // The 7-segment glyphs had a fillMaxWidth underline, so the first group ("14") took the
+    // whole row and ".100.000" was clipped, with a scrap of a digit against the mode chip.
+    // Tabular monospace is sized to this slot: the whole string stays on one line, and a wide
+    // slot is at least as large as the old gold text.
+    BoxWithConstraints(modifier) {
+        // maxHeight is often the whole header, which this readout shares with another row.
+        // Spending that height on the digits overflowed the 64 dp landscape header. The line
+        // budget is the height the digits themselves may use; the width still shrinks them
+        // when the slot is narrow.
+        val lineBudget = if (large) 40f else 28f
+        val heightDp = if (maxHeight.value.isFinite()) minOf(maxHeight.value, lineBudget) else lineBudget
+        val fitted = RadioFace.frequencyTextSp(maxWidth.value, heightDp, readout)
+        // A caller size is a ceiling, never a size the slot cannot hold. That ceiling is how
+        // a fixed 20 sp used to be fine, and a larger fixed size is how ".100.000" was lost.
+        val size = (textSize?.value?.let { minOf(it, fitted) } ?: fitted).coerceAtLeast(12f).sp
+        val bump = (size.value * 0.45f).coerceIn(11f, 16f).sp
+        val digits = TextStyle(
+            fontFamily = Mono,
+            fontSize = size,
+            fontWeight = FontWeight.Medium,
+            fontFeatureSettings = "tnum",
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            FreqPart(parts.first, group == FreqGroup.MHZ, digits) { onGroup(FreqGroup.MHZ) }
+            Text(".", color = RfGuru.gold, style = digits)
+            FreqPart(parts.second, group == FreqGroup.KHZ, digits) { onGroup(FreqGroup.KHZ) }
+            Text(".", color = RfGuru.gold, style = digits)
+            FreqPart(parts.third, group == FreqGroup.HZ, digits) { onGroup(FreqGroup.HZ) }
+            Column(Modifier.padding(start = 4.dp)) {
+                Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(1) })
+                Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(-1) })
+            }
         }
     }
 }
@@ -382,76 +401,33 @@ fun FrequencyReadout(
 private fun FreqPart(
     text: String,
     selected: Boolean,
-    digitH: androidx.compose.ui.unit.Dp,
-    lit: Color,
-    dim: Color,
+    style: TextStyle,
     onClick: () -> Unit,
 ) {
-    // The underline sits under the triplet. A single digit is too small a target on a phone,
+    // The underline sits under the group. A single digit is too small a target on a phone,
     // so the tap selects MHz, kHz or Hz and the +/− beside the readout steps that group.
-    val color = if (selected) lit else dim
+    // The underline is the width of the text, not fillMaxWidth: that call made the first
+    // group consume the row and pushed the rest of the frequency off the screen.
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable(onClick = onClick)
             .semantics { contentDescription = if (selected) "$text selected" else text },
     ) {
-        Row {
-            text.forEach { ch -> SegmentGlyph(ch, color, digitH) }
-        }
+        Text(
+            text = text,
+            color = if (selected) RfGuru.goldText else RfGuru.gold,
+            style = style,
+            maxLines = 1,
+            softWrap = false,
+        )
         Box(
             Modifier
                 .padding(top = 1.dp)
                 .height(2.dp)
-                .fillMaxWidth()
+                .width((text.length * style.fontSize.value * 0.55f).dp)
                 .background(if (selected) RfGuru.gold else Color.Transparent),
         )
-    }
-}
-
-/** One 7-segment digit, or a decimal point. Unlit bars stay faintly on, as on the radio's display. */
-@Composable
-private fun SegmentGlyph(ch: Char, color: Color, height: androidx.compose.ui.unit.Dp) {
-    if (ch == '.') {
-        Box(
-            Modifier.width(height * 0.28f).height(height),
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Box(
-                Modifier
-                    .padding(bottom = height * 0.12f)
-                    .size(height * 0.16f)
-                    .background(color, CircleShape),
-            )
-        }
-        return
-    }
-    val mask = RadioFace.segmentMask(ch)
-    Canvas(Modifier.width(height * 0.62f).height(height)) {
-        val w = size.width
-        val h = size.height
-        val t = (h * 0.12f).coerceAtLeast(1.4f)
-        val gap = t * 0.45f
-        val mid = h / 2f
-        val left = gap + t / 2f
-        val right = w - gap - t / 2f
-        fun seg(bit: Int, x0: Float, y0: Float, x1: Float, y1: Float) {
-            val on = mask and bit != 0
-            drawLine(
-                color = if (on) color else color.copy(alpha = 0.16f),
-                start = Offset(x0, y0),
-                end = Offset(x1, y1),
-                strokeWidth = t,
-                cap = StrokeCap.Round,
-            )
-        }
-        seg(1, left, t, right, t)
-        seg(2, right, t + gap, right, mid - gap)
-        seg(4, right, mid + gap, right, h - t - gap)
-        seg(8, left, h - t, right, h - t)
-        seg(16, left, mid + gap, left, h - t - gap)
-        seg(32, left, t + gap, left, mid - gap)
-        seg(64, left, mid, right, mid)
     }
 }
 
@@ -760,7 +736,36 @@ fun SpectrumStack(
 }
 
 @Composable
-fun GroupStrip(selected: FaceGroup, onSelect: (FaceGroup) -> Unit, modifier: Modifier = Modifier) {
+fun GroupStrip(
+    selected: FaceGroup,
+    onSelect: (FaceGroup) -> Unit,
+    modifier: Modifier = Modifier,
+    distribute: Boolean = false,
+) {
+    // Landscape shares one row with the softkeys. A scrolling strip there hid MEM past the
+    // edge and clipped DFL to DF. Equal weights put all six names on screen.
+    if (distribute) {
+        Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            FaceGroup.entries.forEach { group ->
+                val on = group == selected
+                Text(
+                    group.strip,
+                    color = if (on) RfGuru.barBottom else RfGuru.dim,
+                    fontSize = 11.sp,
+                    fontFamily = Mono,
+                    maxLines = 1,
+                    softWrap = false,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(if (on) RfGuru.gold else RfGuru.button, PillShape)
+                        .clickable { onSelect(group) }
+                        .padding(horizontal = 2.dp, vertical = 4.dp),
+                )
+            }
+        }
+        return
+    }
     Row(
         modifier.horizontalScroll(rememberScrollState()).fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -836,7 +841,13 @@ fun SoftkeyBar(
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Text(
-                                if (compact) RadioFace.compactKeyTitle(label.title) else label.title,
+                                when {
+                                    // "VOL" / "1:2" sat next to "Vol" / "30" and read as a second
+                                    // volume. It is the page key. Name it that way in the tight row.
+                                    compact && pageKey -> "Page"
+                                    compact -> RadioFace.compactKeyTitle(label.title)
+                                    else -> label.title
+                                },
                                 color = if (pageKey) RfGuru.dim else RfGuru.text,
                                 fontSize = 11.sp,
                                 fontFamily = Mono,
@@ -939,10 +950,24 @@ fun HoldToTalk(
 }
 
 @Composable
-fun MicSwitch(checked: Boolean, enabled: Boolean, onChecked: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        androidx.compose.material3.Icon(RadioIcons.Mic, contentDescription = null, tint = RfGuru.dim, modifier = Modifier.height(16.dp))
-        Text(if (checked) "Phone mic" else "Radio mic", color = RfGuru.dim, fontSize = 11.sp, fontFamily = Mono)
+fun MicSwitch(
+    checked: Boolean,
+    enabled: Boolean,
+    onChecked: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val micName = if (checked) "Phone mic" else "Radio mic"
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        androidx.compose.material3.Icon(
+            RadioIcons.Mic,
+            contentDescription = micName,
+            tint = RfGuru.dim,
+            modifier = Modifier.height(16.dp),
+        )
+        if (!compact) {
+            Text(micName, color = RfGuru.dim, fontSize = 11.sp, fontFamily = Mono, maxLines = 1, softWrap = false)
+        }
         Switch(
             checked = checked,
             onCheckedChange = onChecked,
