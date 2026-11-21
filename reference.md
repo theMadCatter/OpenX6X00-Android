@@ -323,6 +323,12 @@ What changed is the Aether draw only. The FT-710 comb, the bake-once history, th
 
 `aetherGrassIsADenseFieldOfBlades` requires the noise blade to cover more than four front pitches, the sheet to be translucent green, and a mid level to stay off red. `./gradlew testDebugUnitTest assembleDebug` after this pass: **210 tests, 0 failures, 0 errors**. No emulator here, so this pass was not re-shot.
 
+## Tall spectrum pane, after the ab8ef51 check
+
+Landscape spectrum-only left a bright lawn on the bottom and a dark void above it. The horizon was 0.92 and the far rows faded by 0.65, so on a tall pane the upper half went black. The Aether horizon is now 0.96 for every aspect, and the grass fade is 0.22 so the field stays green up to that horizon. The FT comb still uses 0.92 and 0.65. The carrier fraction still follows the same amplitude cap.
+
+`theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
+
 ## QRZ logger
 
 `remote_server.c` writes a QSO with `log` / `logq ID CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY` and answers `logged ID ok|no`. That line has no time column, so the time is only in the local Room table. QRZ is the public XML API. The username and password go in EncryptedSharedPreferences and are not logged. A session error or a call with no name and no grid is shown as a limited record. Distance and bearing use the operator's grid. The map is a canvas, with no tile server. ADIF leaves through the share sheet.

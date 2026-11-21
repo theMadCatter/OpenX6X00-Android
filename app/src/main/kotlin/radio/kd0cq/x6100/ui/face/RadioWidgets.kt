@@ -1036,6 +1036,7 @@ private fun DrawScope.drawRidgePlot(
     val depth = (if (aether) SpectrumRidge.GRASS_ROWS else SpectrumRidge.rowsForHeight(specH))
         .coerceAtMost(ring.depth)
     val curve = if (aether) SpectrumRidge.GRASS_CURVE else SpectrumRidge.DEPTH_CURVE
+    val rise = if (aether) SpectrumRidge.riseFor(viewWidth, specH) else SpectrumRidge.RISE
     val amplitude = SpectrumRidge.amplitudeFor(specH)
     val shown = minOf(ring.count, depth)
     // Hoisted. A Stroke inside the age loop would allocate once per row per frame.
@@ -1056,10 +1057,10 @@ private fun DrawScope.drawRidgePlot(
             )
             scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth, curve = curve)
             scratch.y[i] = SpectrumRidge.projectY(
-                age, depth, scratch.level[i], specH, amplitude = amplitude, curve = curve,
+                age, depth, scratch.level[i], specH, rise = rise, amplitude = amplitude, curve = curve,
             )
         }
-        val baseline = SpectrumRidge.projectY(age, depth, 0f, specH, curve = curve)
+        val baseline = SpectrumRidge.projectY(age, depth, 0f, specH, rise = rise, curve = curve)
         if (aether) {
             drawGrassRow(fills, veil, scratch, baseline, age, depth, samples, blade)
         } else {
@@ -1100,7 +1101,11 @@ private fun DrawScope.drawGrassRow(
     }
     for (step in fills.indices) {
         val color = SpectrumRidge.fogArgb(
-            SpectrumRidge.stepArgb(step, RidgeStyle.AETHER), age, depth, SpectrumRidge.GRASS_CURVE,
+            SpectrumRidge.stepArgb(step, RidgeStyle.AETHER),
+            age,
+            depth,
+            SpectrumRidge.GRASS_CURVE,
+            SpectrumRidge.GRASS_FOG,
         )
         drawPath(fills[step], packedArgb(color), style = blade)
     }
