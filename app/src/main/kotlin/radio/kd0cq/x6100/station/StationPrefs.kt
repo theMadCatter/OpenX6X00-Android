@@ -16,6 +16,10 @@ class StationPrefs(context: Context) {
 
     fun syncClock(): Boolean = prefs.getBoolean(CLOCK, false)
 
+    fun myCall(): String = prefs.getString(CALL, "").orEmpty()
+
+    fun writeCall(call: String) { prefs.edit().putString(CALL, call.trim().uppercase()).apply() }
+
     fun writeSend(on: Boolean) { prefs.edit().putBoolean(SEND, on).apply() }
 
     fun writeClock(on: Boolean) { prefs.edit().putBoolean(CLOCK, on).apply() }
@@ -33,6 +37,7 @@ class StationPrefs(context: Context) {
         const val FILE = "station_sync"
         const val SEND = "send_location"
         const val CLOCK = "sync_clock"
+        const val CALL = "my_call"
         const val LAT = "last_lat"
         const val LON = "last_lon"
     }
