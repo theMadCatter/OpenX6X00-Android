@@ -197,3 +197,21 @@ Chris Fink (KD0CQ) approved a fix pass against the simulated radio. Five regress
 PTT, the lease, and `PanelEventBus` are unchanged.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **177 tests, 0 failures, 0 errors** (the two new ones are `frequencyDigitsFitTheSlotTheyAreGiven` and `shortHistoryFillsThePaneAndAFullHistoryIsOneRowPerPixel`). `assembleDebug`: BUILD SUCCESSFUL. No emulator in this environment, so these five were not re-shot here.
+
+## 3D spectrum (after b249501)
+
+Chris Fink (KD0CQ) asked for the AetherSDR ridge plot: the last few dozen spectra drawn as stacked lines, newest in front, height from the signal, colour from the level.
+
+What I found:
+
+- The scope already draws one 2D trace on its own graphics layer, with the same gestures (drag tunes, pinch zooms) and the waterfall bitmap underneath. There is no DataStore. The only preference file is the pairing token.
+- A data-class point per sample would allocate thousands of objects a frame. The projection therefore returns floats into a scratch buffer, and the frame ring's slots are allocated once.
+
+What changed:
+
+- A `2D` / `3D` chip sits beside the palette chip. 2D is the default. The choice is written to SharedPreferences (`radio_face` / `spectrum_view`), the same mechanism as the pairing token, in its own file so forgetting a pairing does not clear it.
+- 3D keeps 48 frames. Each is sampled with the 2D trace's interpolation and the same eased floor and ceiling, so it does not shimmer. Older ridges step up and inset; each is filled to its baseline in the pane's black (so the nearer ridge hides the one behind it) and then stroked blue-green → green → yellow → red. The waterfall palette stays on the waterfall. Gauss is a dark-blue table and would not match the reference ridges.
+- The frequency scale, band plan, VFO line, passband, Zoom chip and palette chip are the same canvas and the same overlays. Drag and pinch are unchanged. The waterfall drawing is unchanged. In 3D the spectrum is given a little more of the pane (landscape waterfall share minus 0.12, portrait trace 55% of the room instead of 40%).
+- PTT, the lease, and `PanelEventBus` were not touched. Closing full screen still leaves orientation alone.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **182 tests, 0 failures, 0 errors** (177, plus the five projection and ring tests in `SpectrumRidgeTest`). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so the ridges were not re-shot.

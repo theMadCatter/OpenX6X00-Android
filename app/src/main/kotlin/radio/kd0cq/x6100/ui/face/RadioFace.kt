@@ -520,6 +520,8 @@ object RadioFace {
      * the scrolling history is actually readable. The trace still keeps [zoomGuardPx] when the
      * pane can spare it, which is what holds the Zoom chip above the frequency ticks.
      * A share of 0 is the portrait split: the trace is 40% of the room left after the scale and plan.
+     * [ridge] gives the 3D plot a little of that room back. The ridges need the height; the
+     * waterfall stays the larger part of a landscape pane.
      */
     data class ScopeSplit(val spectrumPx: Float, val waterfallPx: Float)
 
@@ -529,13 +531,20 @@ object RadioFace {
         planPx: Float,
         waterfallShare: Float,
         zoomGuardPx: Float,
+        ridge: Boolean = false,
     ): ScopeSplit {
         if (heightPx <= 0f) return ScopeSplit(0f, 0f)
         val room = (heightPx - scalePx - planPx).coerceAtLeast(0f)
         val spectrum = if (waterfallShare <= 0f) {
-            maxOf(room * 0.40f, minOf(zoomGuardPx, room))
+            val fraction = if (ridge) 0.55f else 0.40f
+            maxOf(room * fraction, minOf(zoomGuardPx, room))
         } else {
-            val wanted = heightPx - scalePx - planPx - heightPx * waterfallShare.coerceIn(0f, 0.9f)
+            val share = if (ridge) {
+                (waterfallShare - 0.12f).coerceIn(0.45f, 0.9f)
+            } else {
+                waterfallShare.coerceIn(0f, 0.9f)
+            }
+            val wanted = heightPx - scalePx - planPx - heightPx * share
             wanted.coerceIn(minOf(zoomGuardPx, room), room)
         }
         return ScopeSplit(spectrum, (room - spectrum).coerceAtLeast(0f))
