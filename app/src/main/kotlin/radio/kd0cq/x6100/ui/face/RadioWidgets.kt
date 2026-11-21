@@ -22,6 +22,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,17 +37,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import kotlinx.coroutines.flow.collect
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -266,13 +272,16 @@ fun NeedleMeter(
 ) {
     val reading = RadioFace.sMeter(db)
     val txView = RadioFace.txMeter(tx)
+    val meterStyle by FaceChoices.meter.collectAsState()
     Box(
         modifier
             .background(RfGuru.bar, RoundedCornerShape(8.dp))
             .border(1.dp, RfGuru.border, RoundedCornerShape(8.dp))
             .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
-        if (transmitting) {
+        if (!transmitting && meterStyle != MeterStyle.ARC) {
+            FieldMeter(reading.needle, meterStyle, reading.caption, RadioFace.formatDb(db))
+        } else if (transmitting) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
                 MeterBar("W", txView.wattsText, txView.watts, RfGuru.gold)
                 MeterBar("SWR", txView.swrText, txView.swr, if (tx.swr >= 2.0) RfGuru.red else RfGuru.goldText)
@@ -339,6 +348,47 @@ fun NeedleMeter(
     }
 }
 
+/** Classic needle, LED bar, or a lamp with a peak that holds. The arc stays in [NeedleMeter]. */
+@Composable
+private fun FieldMeter(level: Float, style: MeterStyle, caption: String, dbText: String) {
+    var peak by remember { mutableFloatStateOf(0f) }
+    val held = MeterPeak.hold(level, peak)
+    if (held != peak) peak = held
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
+        Canvas(Modifier.fillMaxWidth().height(28.dp)) {
+            val n = 16
+            val gap = 2f
+            val cell = (size.width - gap * (n - 1)) / n
+            val lit = (level * n).toInt().coerceIn(0, n)
+            val peakCell = (held * n).toInt().coerceIn(0, n - 1)
+            when (style) {
+                MeterStyle.NEEDLE -> {
+                    drawLine(RfGuru.gold, Offset(0f, size.height * 0.7f), Offset(size.width, size.height * 0.7f), 2f)
+                    val x = level.coerceIn(0f, 1f) * size.width
+                    drawLine(RfGuru.text, Offset(x, 0f), Offset(x, size.height), 2.4f)
+                }
+                MeterStyle.LED -> {
+                    for (i in 0 until n) {
+                        val on = i < lit
+                        drawRect(
+                            if (on) RfGuru.gold else RfGuru.border,
+                            topLeft = Offset(i * (cell + gap), 4f),
+                            size = Size(cell, size.height - 8f),
+                        )
+                    }
+                }
+                else -> {
+                    drawRect(RfGuru.border, size = Size(size.width, size.height * 0.45f))
+                    drawRect(RfGuru.gold, size = Size(size.width * level.coerceIn(0f, 1f), size.height * 0.45f))
+                    val x = peakCell * (cell + gap)
+                    drawRect(RfGuru.text, topLeft = Offset(x, 0f), size = Size(cell.coerceAtLeast(2f), size.height))
+                }
+            }
+        }
+        Text("$caption  $dbText", color = RfGuru.text, fontFamily = Mono, fontSize = 11.sp)
+    }
+}
+
 @Composable
 private fun MeterBar(label: String, value: String, fraction: Float, color: Color) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -360,6 +410,7 @@ private fun MeterBar(label: String, value: String, fraction: Float, color: Color
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FrequencyReadout(
     freqHz: Int,
@@ -369,6 +420,7 @@ fun FrequencyReadout(
     large: Boolean,
     modifier: Modifier = Modifier,
     textSize: androidx.compose.ui.unit.TextUnit? = null,
+    onTune: ((Int) -> Unit)? = null,
 ) {
     val parts = RadioFace.frequencyParts(freqHz)
     val readout = RadioFace.formatFrequency(freqHz)
@@ -394,20 +446,87 @@ fun FrequencyReadout(
             fontWeight = FontWeight.Medium,
             fontFeatureSettings = "tnum",
         )
+        var selected by rememberSaveable { mutableIntStateOf(-1) }
+        var keypad by rememberSaveable { mutableStateOf(false) }
+        var typed by rememberSaveable { mutableStateOf("") }
+        var carry by remember { mutableFloatStateOf(0f) }
+        val step: (Int) -> Unit = { dir ->
+            if (selected >= 0 && onTune != null) onTune(DigitTune.step(freqHz, selected, dir))
+            else onBump(dir)
+        }
+        DisposableEffect(selected, freqHz, onTune) {
+            DigitKeys.onStep = if (selected >= 0 && onTune != null) {
+                { dir -> step(dir); true }
+            } else {
+                null
+            }
+            onDispose { DigitKeys.onStep = null }
+        }
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            FreqPart(parts.first, group == FreqGroup.MHZ, digits) { onGroup(FreqGroup.MHZ) }
-            Text(".", color = RfGuru.gold, style = digits)
-            FreqPart(parts.second, group == FreqGroup.KHZ, digits) { onGroup(FreqGroup.KHZ) }
-            Text(".", color = RfGuru.gold, style = digits)
-            FreqPart(parts.third, group == FreqGroup.HZ, digits) { onGroup(FreqGroup.HZ) }
-            Column(Modifier.padding(start = 4.dp)) {
-                Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(1) })
-                Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { onBump(-1) })
+            var index = 0
+            listOf(parts.first, parts.second, parts.third).forEachIndexed { groupIndex, part ->
+                if (groupIndex > 0) Text(".", color = RfGuru.gold, style = digits)
+                part.forEach { ch ->
+                    val digitIndex = index
+                    index += 1
+                    val on = digitIndex == selected
+                    Text(
+                        text = ch.toString(),
+                        color = if (on) RfGuru.text else RfGuru.gold,
+                        style = digits,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier
+                            .then(
+                                if (on) {
+                                    Modifier.pointerInput(digitIndex) {
+                                        detectVerticalDragGestures { _, drag ->
+                                            carry += drag
+                                            val moved = (carry / 28f).toInt()
+                                            if (moved != 0) {
+                                                carry -= moved * 28f
+                                                step(-moved)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .combinedClickable(
+                                onClick = {
+                                    selected = digitIndex
+                                    onGroup(FreqGroup.entries[groupIndex])
+                                },
+                                onLongClick = { keypad = true },
+                            ),
+                    )
+                }
             }
+            Column(Modifier.padding(start = 4.dp)) {
+                Text("+", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { step(1) })
+                Text("−", color = RfGuru.gold, fontFamily = Mono, fontSize = bump, modifier = Modifier.clickable { step(-1) })
+            }
+        }
+        if (keypad) {
+            AlertDialog(
+                onDismissRequest = { keypad = false },
+                title = { Text("Frequency, Hz") },
+                text = {
+                    OutlinedTextField(value = typed, onValueChange = { typed = it.filter { ch -> ch.isDigit() || ch == '.' } })
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        DigitTune.fromKeypad(typed)?.let { onTune?.invoke(it) }
+                        keypad = false
+                    }) { Text("Set") }
+                },
+                dismissButton = { TextButton(onClick = { keypad = false }) { Text("Cancel") } },
+            )
         }
     }
 }

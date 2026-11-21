@@ -64,6 +64,7 @@ fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
         Text("Link", style = MaterialTheme.typography.titleMedium)
         BackgroundSwitch()
         StationToggles(viewModel)
+        FieldOptions()
         Line("panel", phase.name.lowercase())
         Line("tci", tciPhase.name.lowercase())
         Line("radio", endpoint?.let { "${it.name} ${it.host}:${it.panelPort} / ${it.tciPort}" } ?: "-")
@@ -233,6 +234,30 @@ private fun readPhoneGrid(context: android.content.Context, viewModel: RadioView
     viewModel.noteStationGrid(grid)
     // The socket is not written. FIRMWARE_ACCEPTS_POS_AND_CLK is false.
     return grid
+}
+
+/** Sunlight face and which S-meter to paint. Both are local. The radio is not asked. */
+@Composable
+private fun FieldOptions() {
+    val context = LocalContext.current
+    val sun by radio.kd0cq.x6100.ui.face.FaceChoices.sunlight.collectAsState()
+    val meter by radio.kd0cq.x6100.ui.face.FaceChoices.meter.collectAsState()
+    Text("Field display", style = MaterialTheme.typography.titleMedium)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("Sunlight, high contrast", color = RfGuru.text)
+        Switch(
+            checked = sun,
+            onCheckedChange = { radio.kd0cq.x6100.ui.face.FaceChoices.writeSun(context, it) },
+        )
+    }
+    Text("S-meter", color = RfGuru.dim, style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        radio.kd0cq.x6100.ui.face.MeterStyle.entries.forEach { style ->
+            TextButton(onClick = { radio.kd0cq.x6100.ui.face.FaceChoices.writeMeter(context, style) }) {
+                Text(style.name.lowercase(), color = if (style == meter) RfGuru.gold else RfGuru.dim)
+            }
+        }
+    }
 }
 
 @Composable
