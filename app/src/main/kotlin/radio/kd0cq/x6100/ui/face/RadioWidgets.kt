@@ -606,7 +606,7 @@ fun SpectrumStack(
     // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
     // row per pixel instead of stretching 48 rows into blocks.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
-    // The ring keeps more frames than are drawn. Both panes draw the front DEPTH rows.
+    // The ring keeps every frame the Aether field draws. The FT comb uses the front DEPTH rows.
     val ridgeRing = remember { SpectrumRidgeRing(SpectrumRidge.MAX_DEPTH) }
     val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
     val ridgeVeil = remember { Path() }
@@ -1011,12 +1011,11 @@ fun SpectrumStack(
 }
 
 /**
- * A comb of ridge lines, oldest first.
+ * Oldest row first. The levels were baked when the frame arrived. This pass only places them.
  *
- * Each row is a dark veil from its baseline up to the trace, then a thin stroke
- * coloured by level. The veil hides the lines behind a nearer row. The stroke is
- * the picture: green noise, yellow, then orange-red where a carrier stands.
- * The levels were baked when the frame arrived. This pass only places them.
+ * Aether is a field of short vertical blades over a translucent green sheet, packed
+ * tight enough that the sheet and the blades cover the floor. FT-710 stays the comb:
+ * a dark veil and one thin crest line per row.
  */
 private fun DrawScope.drawRidgePlot(
     ring: SpectrumRidgeRing,
@@ -1031,14 +1030,18 @@ private fun DrawScope.drawRidgePlot(
 ) {
     if (specH < 2f || viewWidth < 2f || ring.count <= 0 || viewWidthHz <= 0) return
     val samples = scratch.x.size
-    // Always the same sixty-four. A taller pane opens the gaps; it does not add lines
-    // until they fuse into a sheet.
-    val depth = SpectrumRidge.rowsForHeight(specH).coerceAtMost(ring.depth)
+    val aether = style == RidgeStyle.AETHER
+    // The comb stays at sixty-four, with open front gaps. The grass field uses every
+    // slot the ring kept, at an even pitch, so a blade covers the next row's floor.
+    val depth = (if (aether) SpectrumRidge.GRASS_ROWS else SpectrumRidge.rowsForHeight(specH))
+        .coerceAtMost(ring.depth)
+    val curve = if (aether) SpectrumRidge.GRASS_CURVE else SpectrumRidge.DEPTH_CURVE
     val amplitude = SpectrumRidge.amplitudeFor(specH)
     val shown = minOf(ring.count, depth)
-    val strokePx = 1.25.dp.toPx()
+    // Hoisted. A Stroke inside the age loop would allocate once per row per frame.
+    val crest = Stroke(width = 1.25.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val blade = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
     val veilColor = packedArgb(SpectrumRidge.veilArgb(style))
-    // Oldest first. A nearer veil then covers the lines that sit behind its stroke.
     for (age in shown - 1 downTo 0) {
         val rowBins = ring.lengthAt(age)
         val rowCentre = ring.centreAt(age)
@@ -1051,39 +1054,96 @@ private fun DrawScope.drawRidgePlot(
             scratch.level[i] = SpectrumRidge.columnLevel(
                 baked, rowBins, i, samples, viewCentreHz, viewWidthHz, rowCentre, rowWidth,
             )
-            scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth)
-            scratch.y[i] = SpectrumRidge.projectY(age, depth, scratch.level[i], specH, amplitude = amplitude)
+            scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth, curve = curve)
+            scratch.y[i] = SpectrumRidge.projectY(
+                age, depth, scratch.level[i], specH, amplitude = amplitude, curve = curve,
+            )
         }
-        val baseline = SpectrumRidge.projectY(age, depth, 0f, specH)
-        veil.rewind()
-        veil.moveTo(scratch.x[0], baseline)
-        for (k in 0 until samples) veil.lineTo(scratch.x[k], scratch.y[k])
-        veil.lineTo(scratch.x[samples - 1], baseline)
-        veil.close()
-        drawPath(veil, veilColor)
-        for (path in fills) path.rewind()
-        // One open run per colour, so the stroke follows the trace and does not fill it.
-        var start = 0
-        while (start < samples - 1) {
-            val step = SpectrumRidge.colorStep(maxOf(scratch.level[start], scratch.level[start + 1]))
-            var end = start + 1
-            while (end < samples - 1 &&
-                SpectrumRidge.colorStep(maxOf(scratch.level[end], scratch.level[end + 1])) == step
-            ) {
-                end++
-            }
-            val path = fills[step]
-            path.moveTo(scratch.x[start], scratch.y[start])
-            for (k in start + 1..end) path.lineTo(scratch.x[k], scratch.y[k])
-            start = end
-        }
-        val stroke = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        for (step in fills.indices) {
-            val color = SpectrumRidge.fogArgb(SpectrumRidge.stepArgb(step, style), age, depth)
-            drawPath(fills[step], packedArgb(color), style = stroke)
+        val baseline = SpectrumRidge.projectY(age, depth, 0f, specH, curve = curve)
+        if (aether) {
+            drawGrassRow(fills, veil, scratch, baseline, age, depth, samples, blade)
+        } else {
+            drawCombRow(fills, veil, scratch, baseline, age, depth, samples, veilColor, crest, style)
         }
     }
-    drawRidgeGrid(samples, depth, viewWidth, specH)
+    if (!aether) drawRidgeGrid(samples, depth, viewWidth, specH)
+}
+
+/** Translucent green under the tips, then one vertical blade per column. No crest polyline. */
+private fun DrawScope.drawGrassRow(
+    fills: Array<Path>,
+    sheet: Path,
+    scratch: RidgeScratch,
+    baseline: Float,
+    age: Int,
+    depth: Int,
+    samples: Int,
+    blade: Stroke,
+) {
+    sheet.rewind()
+    sheet.moveTo(scratch.x[0], baseline)
+    for (k in 0 until samples) sheet.lineTo(scratch.x[k], scratch.y[k])
+    sheet.lineTo(scratch.x[samples - 1], baseline)
+    sheet.close()
+    drawPath(sheet, packedArgb(SpectrumRidge.grassFillArgb(age, depth)))
+    for (path in fills) path.rewind()
+    for (k in 0 until samples) {
+        val tip = scratch.y[k]
+        if (baseline - tip < 0.75f) continue
+        val x = scratch.x[k]
+        val split = SpectrumRidge.bladeSplit(baseline, tip)
+        fills[0].moveTo(x, baseline)
+        fills[0].lineTo(x, split)
+        val step = SpectrumRidge.colorStep(scratch.level[k])
+        fills[step].moveTo(x, split)
+        fills[step].lineTo(x, tip)
+    }
+    for (step in fills.indices) {
+        val color = SpectrumRidge.fogArgb(
+            SpectrumRidge.stepArgb(step, RidgeStyle.AETHER), age, depth, SpectrumRidge.GRASS_CURVE,
+        )
+        drawPath(fills[step], packedArgb(color), style = blade)
+    }
+}
+
+/** The FT-710 row: a dark veil, then one open stroke along the crest. */
+private fun DrawScope.drawCombRow(
+    fills: Array<Path>,
+    veil: Path,
+    scratch: RidgeScratch,
+    baseline: Float,
+    age: Int,
+    depth: Int,
+    samples: Int,
+    veilColor: Color,
+    crest: Stroke,
+    style: RidgeStyle,
+) {
+    veil.rewind()
+    veil.moveTo(scratch.x[0], baseline)
+    for (k in 0 until samples) veil.lineTo(scratch.x[k], scratch.y[k])
+    veil.lineTo(scratch.x[samples - 1], baseline)
+    veil.close()
+    drawPath(veil, veilColor)
+    for (path in fills) path.rewind()
+    var start = 0
+    while (start < samples - 1) {
+        val step = SpectrumRidge.colorStep(maxOf(scratch.level[start], scratch.level[start + 1]))
+        var end = start + 1
+        while (end < samples - 1 &&
+            SpectrumRidge.colorStep(maxOf(scratch.level[end], scratch.level[end + 1])) == step
+        ) {
+            end++
+        }
+        val path = fills[step]
+        path.moveTo(scratch.x[start], scratch.y[start])
+        for (k in start + 1..end) path.lineTo(scratch.x[k], scratch.y[k])
+        start = end
+    }
+    for (step in fills.indices) {
+        val color = SpectrumRidge.fogArgb(SpectrumRidge.stepArgb(step, style), age, depth)
+        drawPath(fills[step], packedArgb(color), style = crest)
+    }
 }
 
 /** Frequency lines run to the vanishing point. Time lines follow the floor of every sixteenth row. */

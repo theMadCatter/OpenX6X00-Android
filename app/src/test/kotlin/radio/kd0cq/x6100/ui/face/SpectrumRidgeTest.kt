@@ -247,6 +247,32 @@ class SpectrumRidgeTest {
     }
 
     @Test
+    fun aetherGrassIsADenseFieldOfBlades() {
+        val depth = SpectrumRidge.GRASS_ROWS
+        assertTrue(depth > SpectrumRidge.DEPTH)
+        assertTrue(depth <= SpectrumRidge.MAX_DEPTH)
+        val height = 400f
+        val curve = SpectrumRidge.GRASS_CURVE
+        val frontGap = SpectrumRidge.projectY(0, depth, 0f, height, curve = curve) -
+            SpectrumRidge.projectY(1, depth, 0f, height, curve = curve)
+        val blade = height * SpectrumRidge.amplitudeFor(height) * SpectrumRidge.GRASS_HEIGHT
+        // A noise blade covers several row pitches, so the floor does not show between rows.
+        assertTrue(blade > frontGap * 4f)
+        val split = SpectrumRidge.bladeSplit(baseY = 100f, tipY = 40f)
+        assertTrue(split > 40f && split < 70f)
+        val fill = SpectrumRidge.grassFillArgb()
+        val alpha = (fill ushr 24) and 0xFF
+        assertTrue(alpha in 0x30..0x80)
+        assertTrue(green(fill) > red(fill) + 40)
+        assertTrue(green(fill) > blue(fill) + 40)
+        // Yellow through the middle. Red is the top of the ramp, not a mid-level blade.
+        val mid = SpectrumRidge.levelArgb(0.45f)
+        assertTrue(red(mid) < green(mid) + 40)
+        val peak = SpectrumRidge.levelArgb(1f)
+        assertTrue(red(peak) > green(peak) + 80)
+    }
+
+    @Test
     fun aRowIsFrozenOnceItLeavesTheFront() {
         // The boil was every row being rebuilt from the raw bins on the next frame.
         // The snapshot taken at the front has to be the samples still drawn behind it.
