@@ -765,13 +765,23 @@ fun SpectrumStack(
                 }
                 // With no waterfall, the labels sit in the spectrum just above the scale.
                 val spotTop = if (waterH > 8f) waterTop else (specH - 28f).coerceAtLeast(0f)
-                spots.forEach { spot ->
+                val visible = spots.mapIndexedNotNull { index, spot ->
                     val x = RadioFace.fractionForHz(spot.freqHz, hzSpan) * size.width
-                    if (x < -8f || x > size.width + 8f) return@forEach
+                    if (x < -8f || x > size.width + 8f) null else index to x
+                }
+                val spotMeasured = visible.map { (index, _) ->
+                    measurer.measure(spots[index].call, if (spots[index].alert) alertStyle else spotStyle)
+                }
+                val spotLeft = FloatArray(visible.size) { i ->
+                    val x = visible[i].second
+                    (x - spotMeasured[i].size.width / 2f).coerceIn(0f, (size.width - spotMeasured[i].size.width).coerceAtLeast(0f))
+                }
+                val spotRight = FloatArray(visible.size) { i -> spotLeft[i] + spotMeasured[i].size.width }
+                val kept = radio.kd0cq.x6100.spots.SpotLabels.keep(spotLeft, spotRight).toSet()
+                visible.forEachIndexed { i, (index, x) ->
+                    if (i !in kept) return@forEachIndexed
                     drawLine(RfGuru.blue.copy(alpha = 0.7f), Offset(x, spotTop), Offset(x, spotTop + 10f), strokeWidth = 1f)
-                    val measured = measurer.measure(spot.call, if (spot.alert) alertStyle else spotStyle)
-                    val left = (x - measured.size.width / 2f).coerceIn(0f, (size.width - measured.size.width).coerceAtLeast(0f))
-                    drawText(measured, topLeft = Offset(left, spotTop + 10f))
+                    drawText(spotMeasured[i], topLeft = Offset(spotLeft[i], spotTop + 10f))
                 }
             }
 
