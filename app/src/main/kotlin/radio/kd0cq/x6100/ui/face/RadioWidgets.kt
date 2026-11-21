@@ -223,7 +223,12 @@ fun StatusIconRow(onPlaceholder: (String) -> Unit, modifier: Modifier = Modifier
 }
 
 @Composable
-fun ClockBlock(batteryPercent: Int?, onPlaceholder: (String) -> Unit, modifier: Modifier = Modifier) {
+fun ClockBlock(
+    batteryPercent: Int?,
+    onPlaceholder: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    stationGrid: String = "",
+) {
     Column(modifier = modifier, horizontalAlignment = Alignment.End) {
         Text(
             "--:--:--",
@@ -246,6 +251,9 @@ fun ClockBlock(batteryPercent: Int?, onPlaceholder: (String) -> Unit, modifier: 
             modifier = Modifier.clickable { onPlaceholder("Battery time remaining") }
                 .semantics { contentDescription = "Battery time remaining. $PENDING_FIRMWARE" },
         )
+        if (stationGrid.isNotBlank()) {
+            Text(stationGrid, color = RfGuru.goldText, fontFamily = Mono, fontSize = 11.sp)
+        }
     }
 }
 

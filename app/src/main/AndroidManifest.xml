@@ -25,6 +25,11 @@
     <!-- Transmitting: the microphone feeds the radio over TCI -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Phone position for the station grid. The radio has no pos command yet, so this
+         only fills the header and Setup. The prompt is shown when the toggle is turned on. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
     <!-- NSD: the radio advertises itself with avahi (_http._tcp, _tci._tcp) -->
     <uses-feature
         android:name="android.hardware.wifi"

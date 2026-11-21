@@ -315,3 +315,9 @@ What changed, 3D only. PTT, the lease, `PanelEventBus`, background mode, the lay
 `remote_server.c` writes a QSO with `log` / `logq ID CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY` and answers `logged ID ok|no`. That line has no time column, so the time is only in the local Room table. QRZ is the public XML API. The username and password go in EncryptedSharedPreferences and are not logged. A session error or a call with no name and no grid is shown as a limited record. Distance and bearing use the operator's grid. The map is a canvas, with no tile server. ADIF leaves through the share sheet.
 
 `./gradlew testDebugUnitTest assembleDebug` after this feature: the logger tests in `LoggerTest` (XML, distance, bearing, ADIF, worked-before). Assemble succeeded.
+
+## Phone location and clock
+
+`remote_server.c` has no `pos` and no `clk`. Both are answered `err unknown command`, so Setup stores the toggles and does not write the socket. The words are `pos LAT LON [ACC]` and `clk` / `clk?`. A phone fix more than 100 m from the last one updates the header grid. The radio's own grid is not reported by the protocol.
+
+`./gradlew testDebugUnitTest assembleDebug` after this feature includes `StationSyncTest`. Assemble succeeded.

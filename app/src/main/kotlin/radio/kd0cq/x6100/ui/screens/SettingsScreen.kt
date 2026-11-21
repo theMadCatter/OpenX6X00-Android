@@ -63,6 +63,7 @@ fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
 
         Text("Link", style = MaterialTheme.typography.titleMedium)
         BackgroundSwitch()
+        StationToggles(viewModel)
         Line("panel", phase.name.lowercase())
         Line("tci", tciPhase.name.lowercase())
         Line("radio", endpoint?.let { "${it.name} ${it.host}:${it.panelPort} / ${it.tciPort}" } ?: "-")
@@ -164,6 +165,74 @@ private fun BackgroundSwitch() {
             context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
     }) { Text("Battery optimization", color = RfGuru.gold) }
+}
+
+/**
+ * Phone location and the radio clock. The toggles are stored. The commands are not sent:
+ * remote_server.c has no `pos` and no `clk`, and answers `err unknown command`.
+ * A granted location still fills the header grid from the phone.
+ */
+@Composable
+private fun StationToggles(viewModel: RadioViewModel) {
+    val context = LocalContext.current
+    val prefs = remember { radio.kd0cq.x6100.station.StationPrefs(context) }
+    var send by remember { mutableStateOf(prefs.sendLocation()) }
+    var clock by remember { mutableStateOf(prefs.syncClock()) }
+    var note by remember { mutableStateOf(PENDING_FIRMWARE) }
+    val permission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions(),
+    ) { granted ->
+        if (granted.values.any { it }) note = readPhoneGrid(context, viewModel) ?: PENDING_FIRMWARE
+    }
+    Text("Phone and radio", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+    Text(note, style = MaterialTheme.typography.bodySmall, color = RfGuru.mute)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("Send phone location to radio", modifier = Modifier.weight(1f))
+        Switch(checked = send, onCheckedChange = { on ->
+            send = on
+            prefs.writeSend(on)
+            if (on) {
+                permission.launch(arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                ))
+            }
+        })
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("Sync radio clock", modifier = Modifier.weight(1f))
+        Switch(checked = clock, onCheckedChange = { on ->
+            clock = on
+            prefs.writeClock(on)
+        })
+    }
+    OutlinedButton(onClick = {
+        val choice = radio.kd0cq.x6100.station.ClockSync.choose(clock, radio.kd0cq.x6100.station.FIRMWARE_ACCEPTS_POS_AND_CLK)
+        note = if (choice == radio.kd0cq.x6100.station.SyncChoice.PENDING) PENDING_FIRMWARE else "Clock command is ready"
+    }) { Text("Sync") }
+}
+
+private fun readPhoneGrid(context: android.content.Context, viewModel: RadioViewModel): String? {
+    val fine = context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val coarse = context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    if (!fine && !coarse) return null
+    val manager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
+    val provider = if (fine) android.location.LocationManager.GPS_PROVIDER else android.location.LocationManager.NETWORK_PROVIDER
+    val fix = runCatching { manager.getLastKnownLocation(provider) }.getOrNull() ?: return null
+    val now = radio.kd0cq.x6100.log.LatLon(fix.latitude, fix.longitude)
+    val prefs = radio.kd0cq.x6100.station.StationPrefs(context)
+    val choice = radio.kd0cq.x6100.station.PositionSync.choose(
+        enabled = true,
+        firmware = true,
+        last = prefs.lastFix(),
+        now = now,
+    )
+    if (choice != radio.kd0cq.x6100.station.SyncChoice.SEND) return viewModel.stationGrid.value
+    prefs.writeLastFix(now)
+    val grid = radio.kd0cq.x6100.log.Maidenhead.encode(now)
+    viewModel.noteStationGrid(grid)
+    // The socket is not written. FIRMWARE_ACCEPTS_POS_AND_CLK is false.
+    return grid
 }
 
 @Composable
