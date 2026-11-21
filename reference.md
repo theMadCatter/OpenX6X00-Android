@@ -321,3 +321,11 @@ What changed, 3D only. PTT, the lease, `PanelEventBus`, background mode, the lay
 `remote_server.c` has no `pos` and no `clk`. Both are answered `err unknown command`, so Setup stores the toggles and does not write the socket. The words are `pos LAT LON [ACC]` and `clk` / `clk?`. A phone fix more than 100 m from the last one updates the header grid. The radio's own grid is not reported by the protocol.
 
 `./gradlew testDebugUnitTest assembleDebug` after this feature includes `StationSyncTest`. Assemble succeeded.
+
+## FT8 polish and JS8
+
+FT8 already had `ft8 reply ID`. The list now marks CQ, a call to the operator, and a station in the local log, and it shows the seconds left in the slot. Transmit stays that reply command, with a TX mark when the radio says it is sending.
+
+`remote_server.c` has no `js8`, `js8r` or `js8 wf`. The JS8 screen parses those lines and builds the commands, and it does not send them. Heartbeat, CQ and compose say the firmware does not have them yet.
+
+`./gradlew testDebugUnitTest assembleDebug` after this feature includes `DigitalTest`. Assemble succeeded.

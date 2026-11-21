@@ -45,6 +45,7 @@ import androidx.navigation.compose.rememberNavController
 import radio.kd0cq.x6100.ui.face.RadioIcons
 import radio.kd0cq.x6100.ui.screens.ConnectScreen
 import radio.kd0cq.x6100.ui.screens.Ft8Screen
+import radio.kd0cq.x6100.ui.screens.Js8Screen
 import radio.kd0cq.x6100.ui.screens.LogScreen
 import radio.kd0cq.x6100.ui.screens.PairingScreen
 import radio.kd0cq.x6100.ui.screens.RadioScreen
@@ -190,7 +191,10 @@ private fun androidx.navigation.NavGraphBuilder.screens(nav: NavHostController, 
         })
     }
     composable(Route.SCREEN.path) { ScreenMirrorScreen(viewModel) }
-    composable(Route.FT8.path) { Ft8Screen(viewModel) }
+    composable(Route.FT8.path) {
+        Ft8Screen(viewModel, onJs8 = { nav.navigate("js8") { launchSingleTop = true } })
+    }
+    composable("js8") { Js8Screen() }
     composable(Route.SPOTS.path) { SpotsScreen(viewModel) }
     composable(Route.LOG.path) { LogScreen(viewModel) }
     composable(Route.SETTINGS.path) { SettingsScreen(viewModel, onBack = { nav.popBackStack() }) }
