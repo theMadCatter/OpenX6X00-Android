@@ -329,6 +329,10 @@ Landscape spectrum-only left a bright lawn on the bottom and a dark void above i
 
 `theGrassFieldFillsWideAndTallPanesAndTheCarrierStaysProportional` checks a wide tall pane, a short strip, a portrait pane, and a square. The field covers at least 90% of each, and the carrier fractions stay within 0.12 of one another.
 
+## Rotation layout
+
+The side rail and the bottom bar were two navigation hosts, and the rail was chosen from `Configuration.orientation`. That flag changes before the window size does. On the way from landscape to portrait the new host was the portrait scaffold, while the face still measured a wide pane and kept the landscape deck. The keys ended up under the band plan, and the bottom bar and PTT were not on screen until the window finished resizing. There is one host now. `RadioFace.wideWindow` is the window width against its height, published as `LocalWideWindow`, and both the chrome and the face read it. A zero or unfinished size stays on the portrait face. `theWindowAspectPicksTheOperatingFace` covers a wide pane, a tall pane, a square, and an unfinished size.
+
 ## Frequency digit mark
 
 Tapping a digit only swapped the gold glyph for the body colour. On the sunlight face both are black, so the chosen place disappeared, and at night the two colours are close. The chosen digit now sits on a gold chip with the bar colour for the glyph, and a 3 dp bar under that glyph only. The bar width is 0.62 em, the same advance the readout fitter uses, so it cannot take the row the way `fillMaxWidth` did. The selection is not cleared by a drag or a volume-key step. The line budget gives up 4 dp so the mark fits the header.

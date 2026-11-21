@@ -33,6 +33,15 @@ class RadioFaceTest {
     }
 
     @Test
+    fun theWindowAspectPicksTheOperatingFace() {
+        assertTrue(RadioFace.wideWindow(800f, 360f))
+        assertFalse(RadioFace.wideWindow(360f, 800f))
+        assertFalse(RadioFace.wideWindow(640f, 640f))
+        assertFalse(RadioFace.wideWindow(0f, 800f))
+        assertFalse(RadioFace.wideWindow(Float.POSITIVE_INFINITY, 480f))
+    }
+
+    @Test
     fun frequencyDigitsFitTheSlotTheyAreGiven() {
         // 14.100.000 is the string the header dropped after "14". The size is chosen from the
         // slot, and the whole string, plus room for the +/− column, has to stay inside that width.
