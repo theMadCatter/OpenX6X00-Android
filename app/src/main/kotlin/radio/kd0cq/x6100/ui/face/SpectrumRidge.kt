@@ -102,14 +102,24 @@ enum class RidgeStyle(val stored: String, val chip: String) {
  *
  * [projectX] and [projectY] return floats so the canvas can fill a reused buffer.
  * Age 0 is the newest frame, full width along the bottom. Older ages step up
- * and in a little, and [depthT] packs them closer together toward the back, so
- * the comb stays readable: wide gaps in front, tight ones at the far edge.
- * [RISE] puts the oldest baseline near the top of the pane. The line is the
- * picture. The fill under it is a dark veil, not a coloured carpet.
+ * and in a little. [depthT] packs the FT-710 comb closer together toward the
+ * back. The Aether field uses [GRASS_ROWS] at an even pitch, so a short blade
+ * covers the gap to the next row and the dark floor does not show through.
+ * [RISE] puts the oldest baseline near the top of the pane.
+ *
+ * Aether is vertical blades: height is the bin, the shaft is grass green, and
+ * the tip follows the green-yellow-red ramp. Red is only the top of that ramp.
+ * The FT-710 style is still the dark veil and the cyan-to-white crest line.
  */
 object SpectrumRidge {
-    /** Frames drawn. The same count in the short strip and the full-scope pane. */
+    /** Frames the FT-710 comb draws. The same count in the short strip and the full-scope pane. */
     const val DEPTH = 64
+
+    /**
+     * Frames the Aether field draws. The ring already keeps this many. A tighter
+     * pitch than [DEPTH] is what stops the floor showing between the blades.
+     */
+    const val GRASS_ROWS = 128
 
     /** Frames the ring keeps. Drawing uses [DEPTH]; the extra slots are unused history. */
     const val MAX_DEPTH = 128
@@ -167,9 +177,25 @@ object SpectrumRidge {
     /**
      * Ages are not spaced evenly. Below 1, the first rows take more of the
      * pane and the last rows squeeze together. 0.80 is a little tighter at the
-     * front than 0.70, so the comb reads as a lawn, and the back is still closer.
+     * front than 0.70, so the FT comb stays readable, and the back is still closer.
      */
     const val DEPTH_CURVE = 0.80f
+
+    /**
+     * Aether row pitch. 1 is even, so the front gap is as tight as the back and
+     * a grass blade covers several rows. The FT comb does not use this.
+     */
+    const val GRASS_CURVE = 1f
+
+    /**
+     * Fraction of a blade, measured down from the tip, painted in the level
+     * colour. The shaft under that is grass green. A strong signal is red only
+     * in this tip; the noise never reaches that stop.
+     */
+    const val BLADE_TIP = 0.40f
+
+    /** Opacity of the green sheet under the Aether blades. Translucent, so the blades stay visible. */
+    const val GRASS_FILL_ALPHA = 0x5A
 
     /** Veil opacity, 0xE6 is 90%. Near enough to opaque that a nearer row hides the one behind it. */
     const val VEIL_ALPHA = 0xE6
@@ -197,10 +223,10 @@ object SpectrumRidge {
     }
 
     /** 0 at the newest row, 1 at the oldest, compressed toward the back. */
-    fun depthT(age: Int, depth: Int): Float {
+    fun depthT(age: Int, depth: Int, curve: Float = DEPTH_CURVE): Float {
         if (depth <= 1) return 0f
         val u = age.coerceIn(0, depth - 1) / (depth - 1).toFloat()
-        return u.pow(DEPTH_CURVE)
+        return u.pow(curve.coerceIn(0.05f, 1f))
     }
 
     /**
@@ -222,9 +248,10 @@ object SpectrumRidge {
         depth: Int,
         width: Float,
         inset: Float = INSET,
+        curve: Float = DEPTH_CURVE,
     ): Float {
         if (width <= 0f || sampleCount <= 1 || depth <= 1) return 0f
-        val t = depthT(age, depth)
+        val t = depthT(age, depth, curve)
         val side = width * inset * t
         val span = (width - 2f * side).coerceAtLeast(0f)
         val along = i.coerceIn(0, sampleCount - 1) / (sampleCount - 1).toFloat()
@@ -239,9 +266,10 @@ object SpectrumRidge {
         rise: Float = RISE,
         amplitude: Float = AMPLITUDE,
         distanceShrink: Float = DISTANCE_SHRINK,
+        curve: Float = DEPTH_CURVE,
     ): Float {
         if (height <= 0f || depth <= 1) return height.coerceAtLeast(0f)
-        val t = depthT(age, depth)
+        val t = depthT(age, depth, curve)
         val baseline = height * (1f - rise * t)
         val lift = height * amplitude * level.coerceIn(0f, 1f) * (1f - distanceShrink * t)
         return (baseline - lift).coerceIn(0f, height)
@@ -476,9 +504,25 @@ object SpectrumRidge {
         levelArgb(step.coerceIn(0, COLOR_STEPS - 1) / (COLOR_STEPS - 1).toFloat(), style)
 
     /** Farther strokes are dimmer. The front row is unchanged. The oldest keeps about a third. */
-    fun fogArgb(argb: Int, age: Int, depth: Int): Int {
+    fun fogArgb(argb: Int, age: Int, depth: Int, curve: Float = DEPTH_CURVE): Int {
         if (depth <= 1) return argb
-        return scaleRgb(argb, 1f - FOG * depthT(age, depth))
+        return scaleRgb(argb, 1f - FOG * depthT(age, depth, curve))
+    }
+
+    /**
+     * Where the level colour starts on one blade. [baseY] is the floor of the
+     * row and [tipY] is the bin. The result is between them, nearer the tip.
+     */
+    fun bladeSplit(baseY: Float, tipY: Float): Float = tipY + (baseY - tipY) * BLADE_TIP
+
+    /**
+     * The sheet under the Aether blades. Green, and translucent, so stacked rows
+     * hide the dark floor without painting out the blades. [age] dims the back
+     * the same way the blade tips dim. The FT comb does not use this.
+     */
+    fun grassFillArgb(age: Int = 0, depth: Int = GRASS_ROWS): Int {
+        val fogged = fogArgb(0xFF2E9A40.toInt(), age, depth, GRASS_CURVE) and 0x00FFFFFF
+        return (GRASS_FILL_ALPHA shl 24) or fogged
     }
 
     /**

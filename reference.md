@@ -310,6 +310,19 @@ What changed, 3D only. PTT, the lease, `PanelEventBus`, background mode, the lay
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **199 tests, 0 failures, 0 errors**. `aRowIsFrozenOnceItLeavesTheFront` keeps a copy of the front row and requires the same samples two frames later, including after the floor has moved. No emulator here, so this pass was not re-shot.
 
+## Aether grass field, after the shot10 check of b6011d4
+
+Shot10 of `b6011d4` was warmer, and it was still a comb: wavy crest lines with a dark gap between them. AetherSDR is a dense field of short vertical blades, with no floor showing between the rows.
+
+What changed is the Aether draw only. The FT-710 comb, the bake-once history, the carrier peak-hold, and the six features are the same.
+
+- Aether draws all 128 ring slots at an even pitch. A noise blade is several times that pitch, and a translucent green sheet sits under the blades, so the dark floor does not show through.
+- Each column is a vertical blade. The shaft is grass green. The top 40% uses the existing green-yellow-red ramp, so red is only a strong signal. There is no crest polyline in this style.
+- The FT-710 path is still the dark veil and the cyan-to-white stroke, at 64 rows. Its grid stays. The Aether field does not draw that floor grid.
+- Rows are still baked in `push`. Draw only places them. A Stroke is created once per frame, not once per row.
+
+`aetherGrassIsADenseFieldOfBlades` requires the noise blade to cover more than four front pitches, the sheet to be translucent green, and a mid level to stay off red. `./gradlew testDebugUnitTest assembleDebug` after this pass: **210 tests, 0 failures, 0 errors**. No emulator here, so this pass was not re-shot.
+
 ## QRZ logger
 
 `remote_server.c` writes a QSO with `log` / `logq ID CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY` and answers `logged ID ok|no`. That line has no time column, so the time is only in the local Room table. QRZ is the public XML API. The username and password go in EncryptedSharedPreferences and are not logged. A session error or a call with no name and no grid is shown as a limited record. Distance and bearing use the operator's grid. The map is a canvas, with no tile server. ADIF leaves through the share sheet.
