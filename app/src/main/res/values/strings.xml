@@ -11,4 +11,5 @@
     <string name="notif_connecting">Connecting to the radio…</string>
     <string name="notif_disconnected">Not connected</string>
     <string name="notif_stop">Stop</string>
+    <string name="notif_open">Open</string>
 </resources>

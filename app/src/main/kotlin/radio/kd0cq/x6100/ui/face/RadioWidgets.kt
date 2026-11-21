@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -90,6 +91,7 @@ import radio.kd0cq.x6100.net.PlanSegment
 import radio.kd0cq.x6100.net.RadioState
 import radio.kd0cq.x6100.net.SpectrumFrame
 import radio.kd0cq.x6100.net.Spot
+import radio.kd0cq.x6100.service.BackgroundRun
 import radio.kd0cq.x6100.net.TxMeters
 import radio.kd0cq.x6100.ui.theme.RfGuru
 import radio.kd0cq.x6100.ui.theme.packedArgb
@@ -465,7 +467,14 @@ fun SpectrumStack(
     waterfallShare: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
-    val frame by spectrum.collectAsState()
+    // Off while the activity is stopped. Collecting here is what scrolls the waterfall
+    // and pushes 3D rows, so a phone in a pocket does not keep doing that work.
+    val drawScope by BackgroundRun.drawScope.collectAsState()
+    var frame by remember { mutableStateOf(spectrum.value) }
+    LaunchedEffect(drawScope) {
+        if (!drawScope) return@LaunchedEffect
+        spectrum.collect { next -> frame = next }
+    }
     // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
     // row per pixel instead of stretching 48 rows into blocks.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
@@ -494,7 +503,8 @@ fun SpectrumStack(
     var paneHeight by remember { mutableIntStateOf(0) }
     var waterRows by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
-    LaunchedEffect(frame?.sequence, frame?.centreHz, frame?.widthHz) {
+    LaunchedEffect(drawScope, frame?.sequence, frame?.centreHz, frame?.widthHz) {
+        if (!drawScope) return@LaunchedEffect
         val current = frame ?: return@LaunchedEffect
         history.push(current.db, current.centreHz, current.widthHz)
         // Same frames the waterfall keeps. The ring copies into slots it already owns.
