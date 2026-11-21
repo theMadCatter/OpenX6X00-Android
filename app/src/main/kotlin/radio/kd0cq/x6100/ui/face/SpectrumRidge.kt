@@ -12,13 +12,24 @@
 // calls the axes out: X frequency, Y intensity, Z time.
 //
 // The first drawing filled each ridge with black and stroked the crest, so the
-// phone showed a teal wireframe. A ridge is now a solid wall from its baseline
-// up to the signal, opaque, so the nearer wall hides the one behind it.
+// phone showed a teal wireframe. A ridge is a solid wall from its baseline up
+// to the signal, opaque, so the nearer wall hides the one behind it.
+//
+// A later pass squared the noise and sampled 96 points across 1024 bins, so a
+// real carrier fell between the samples and the lawn went flat and dark. Each
+// column now keeps the strongest bin in its slice. Noise within a few dB of
+// the floor is grass, with its height left intact. Anything above that rises
+// toward the top of the pane. The back row sits near the top; the vanishing
+// point is above the pane.
 //
 // No Android types. The canvas calls these with buffers it already owns.
 
 package radio.kd0cq.x6100.ui.face
 
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -89,10 +100,11 @@ enum class RidgeStyle(val stored: String, val chip: String) {
  * Perspective, level shaping, and colour of one ridge.
  *
  * [projectX] and [projectY] return floats so the canvas can fill a reused buffer.
- * Age 0 is the newest frame, full width along the bottom. Larger ages step toward
- * the vanishing point: up, and in from both sides. [INSET] and [RISE] are the
- * trapezoid. [AMPLITUDE] is the vertical exaggeration that turns a carrier into
- * a wall instead of a wrinkle.
+ * Age 0 is the newest frame, full width along the bottom. Larger ages step up
+ * and in a little. [RISE] puts the oldest baseline near the top of the pane, so
+ * the surface fills it. [INSET] is small: the sides meet above the pane, which
+ * is the modest perspective in AetherSDR, not a vanishing point drawn in the
+ * black above the lawn. [AMPLITUDE] is how far a full-scale peak rises.
  */
 object SpectrumRidge {
     /** Frames drawn when the spectrum shares the pane with the waterfall. */
@@ -101,8 +113,12 @@ object SpectrumRidge {
     /** Frames the ring can hold when the spectrum has the whole pane. */
     const val MAX_DEPTH = 128
 
-    /** Samples across one ridge. Wide enough to be smooth after the spatial pass, few enough to fill quickly. */
-    const val SAMPLES = 96
+    /**
+     * Samples across one ridge. A 1024-bin FFT with only a few dozen columns
+     * skips a one-bin carrier. Each column still peak-holds the bins it covers,
+     * and 256 columns keep that carrier a narrow ridge.
+     */
+    const val SAMPLES = 256
 
     /** Slot size. The panel sends WATERFALL_NFFT, which is 1024. */
     const val BINS = 1024
@@ -110,14 +126,14 @@ object SpectrumRidge {
     /** Solid colours a row is split into. One path per colour, not one path per sample. */
     const val COLOR_STEPS = 8
 
-    /** How far the oldest ridge pulls in from each side, as a fraction of the width. */
-    const val INSET = 0.38f
+    /** How far the oldest ridge pulls in from each side. Small: the pane stays wide at the back. */
+    const val INSET = 0.10f
 
-    /** How far the oldest baseline rises from the bottom, as a fraction of the height. */
-    const val RISE = 0.66f
+    /** How far the oldest baseline rises. Near 1, so that edge sits at the top of the pane. */
+    const val RISE = 0.92f
 
     /** How far a full-scale peak on the front ridge rises, as a fraction of the height. */
-    const val AMPLITUDE = 0.78f
+    const val AMPLITUDE = 0.90f
 
     /**
      * How much of that lift is kept on the oldest ridge. Small enough that a carrier
@@ -125,14 +141,23 @@ object SpectrumRidge {
      */
     const val DISTANCE_SHRINK = 0.28f
 
-    /** How much brightness the oldest row loses. Opaque, so a nearer wall still covers it. */
-    const val FOG = 0.62f
+    /**
+     * How much brightness the oldest row loses. Half, not a fade to black: the
+     * far lawn stays a lawn. Alpha stays opaque so a nearer wall still covers it.
+     */
+    const val FOG = 0.50f
+
+    /** dB above the eased floor that still counts as grass. A signal past this stands up. */
+    const val GRASS_DB = 8f
+
+    /** Height of the top of that grass, as a fraction of full scale. The dB inside it are kept. */
+    const val GRASS_HEIGHT = 0.22f
 
     /**
-     * Levels at or below this, after the floor is subtracted, are noise. They compress
-     * into a low sheet. Above it, the level is kept so a real signal stands up.
+     * Quiet-band span, in dB. A few dB of noise then has visible height. A louder
+     * frame opens the span to its own peak, so the peak is not stuck at this size.
      */
-    const val KNEE = 0.36f
+    const val MIN_SPAN_DB = 12f
 
     /** Faint floor grid, ARGB. Drawn over the surface so it stays visible on the sheet. */
     const val GRID_ARGB = 0x5590C8BC.toInt()
@@ -194,48 +219,109 @@ object SpectrumRidge {
     }
 
     /**
-     * Soft knee after the eased floor has already been subtracted.
+     * Height of one bin after the floor is subtracted.
      *
-     * The raw level of a quiet band still wanders across the lower third of the window,
-     * and drawing that wander is the scribble. Below [KNEE] the level is squared down
-     * into a thin sheet. Above it the rest of the range is kept, so a carrier stays tall.
+     * [aboveFloorDb] is the bin minus the eased floor. [spanDb] is the eased
+     * ceiling minus that floor. The first [GRASS_DB] are drawn in proportion, so
+     * the lawn has the texture of the noise instead of a flat sheet. Past that,
+     * the level runs to full scale at the ceiling. A carrier at the ceiling is
+     * therefore as tall as [AMPLITUDE] allows, not a wrinkle on the grass.
      */
-    fun shapeLevel(raw: Float): Float {
-        val v = raw.coerceIn(0f, 1f)
-        if (v <= KNEE) {
-            val t = v / KNEE
-            return FLOOR_SHEET * t * t
-        }
-        val t = (v - KNEE) / (1f - KNEE)
-        return (FLOOR_SHEET + t * (1f - FLOOR_SHEET)).coerceIn(0f, 1f)
+    fun shapeDb(aboveFloorDb: Float, spanDb: Float): Float {
+        val above = aboveFloorDb.coerceAtLeast(0f)
+        val span = spanDb.coerceAtLeast(MIN_SPAN_DB)
+        val grass = GRASS_DB.coerceAtMost(span * 0.45f)
+        if (grass <= 0f) return if (above <= 0f) 0f else 1f
+        if (above <= grass) return (above / grass) * GRASS_HEIGHT
+        val t = ((above - grass) / (span - grass)).coerceIn(0f, 1f)
+        return GRASS_HEIGHT + t * (1f - GRASS_HEIGHT)
     }
 
     /**
-     * Three-tap smooth. A sample that stands well above both neighbours keeps most of
-     * its height, so a real peak is not averaged away. The floor, which does not stand
-     * up, is what gets flattened.
+     * The loudest bin in one column.
+     *
+     * The column is a slice of the view. A sample at the column's centre misses
+     * a carrier that sits between two centres, which is what a 96-wide ridge did
+     * to the signal at the VFO. The slice is read from [rowCentreHz] / [rowWidthHz]
+     * because an older row can have been taken on a different span.
      */
-    fun smoothSpatial(src: FloatArray, dst: FloatArray, count: Int) {
+    fun columnPeakDb(
+        db: ByteArray,
+        liveBins: Int,
+        column: Int,
+        columns: Int,
+        viewCentreHz: Int,
+        viewWidthHz: Int,
+        rowCentreHz: Int,
+        rowWidthHz: Int,
+    ): Float {
+        val n = liveBins.coerceIn(0, db.size)
+        if (n == 0 || columns <= 0 || viewWidthHz <= 0 || rowWidthHz <= 0) return Float.NEGATIVE_INFINITY
+        val hz0 = edgeHz(column, columns, viewCentreHz, viewWidthHz)
+        val hz1 = edgeHz(column + 1, columns, viewCentreHz, viewWidthHz)
+        val b0 = WaterfallDisplay.binAtHz(min(hz0, hz1), rowCentreHz, rowWidthHz, n)
+        val b1 = WaterfallDisplay.binAtHz(max(hz0, hz1), rowCentreHz, rowWidthHz, n)
+        var i0 = floor(b0).toInt()
+        var i1 = ceil(b1).toInt() - 1
+        if (i1 < i0) i1 = i0
+        i0 = i0.coerceIn(0, n - 1)
+        i1 = i1.coerceIn(0, n - 1)
+        var peak = db[i0].toInt()
+        for (i in i0..i1) {
+            val v = db[i].toInt()
+            if (v > peak) peak = v
+        }
+        return peak.toFloat()
+    }
+
+    /** Left edge of column [edge], in Hz, across [columns] columns of the view. */
+    private fun edgeHz(edge: Int, columns: Int, centreHz: Int, widthHz: Int): Float {
+        val left = centreHz - widthHz / 2f
+        return left + edge.coerceIn(0, columns).toFloat() / columns * widthHz
+    }
+
+    /**
+     * Smooth the grass only. A column above [keepAbove] is a signal and is copied
+     * unchanged, including its neighbours' average, so the ridge stays one column wide.
+     */
+    fun smoothSpatial(src: FloatArray, dst: FloatArray, count: Int, keepAbove: Float = GRASS_HEIGHT) {
         if (count <= 0) return
         if (count == 1) {
             dst[0] = src[0]
             return
         }
-        dst[0] = src[0] * 0.72f + src[1] * 0.28f
+        dst[0] = if (src[0] > keepAbove) src[0] else src[0] * 0.72f + (if (src[1] <= keepAbove) src[1] else src[0]) * 0.28f
         for (i in 1 until count - 1) {
-            val prev = src[i - 1]
             val cur = src[i]
+            if (cur > keepAbove) {
+                dst[i] = cur
+                continue
+            }
+            var sum = cur
+            var weight = 1f
+            val prev = src[i - 1]
             val next = src[i + 1]
-            val avg = prev * 0.22f + cur * 0.56f + next * 0.22f
-            val neighbors = maxOf(prev, next)
-            dst[i] = if (cur > neighbors + 0.15f) cur * 0.85f + avg * 0.15f else avg
+            if (prev <= keepAbove) {
+                sum += prev
+                weight += 1f
+            }
+            if (next <= keepAbove) {
+                sum += next
+                weight += 1f
+            }
+            val avg = sum / weight
+            dst[i] = cur * 0.45f + avg * 0.55f
         }
-        dst[count - 1] = src[count - 1] * 0.72f + src[count - 2] * 0.28f
+        val last = count - 1
+        dst[last] = if (src[last] > keepAbove) src[last] else src[last] * 0.72f + (if (src[last - 1] <= keepAbove) src[last - 1] else src[last]) * 0.28f
     }
 
-    /** A light blend with the older row. A carrier in both rows stays; a one-bin flicker drops. */
-    fun smoothTemporal(current: Float, older: Float): Float =
-        current * 0.74f + older * 0.26f
+    /**
+     * A light blend of two grass samples. A signal, new or still there, is not
+     * pulled toward the other row: that blend was rounding carriers off.
+     */
+    fun smoothTemporal(current: Float, older: Float, keepAbove: Float = GRASS_HEIGHT): Float =
+        if (current > keepAbove || older > keepAbove) current else current * 0.74f + older * 0.26f
 
     fun levelArgb(level: Float, style: RidgeStyle = RidgeStyle.AETHER): Int {
         val stops = if (style == RidgeStyle.FT710) FT_AT else AETHER_AT
@@ -287,22 +373,94 @@ object SpectrumRidge {
         return rgb
     }
 
+    private val AETHER_AT = floatArrayOf(0f, 0.08f, 0.20f, 0.42f, 0.68f, 1f)
+
     /**
-     * How high the compressed noise sits, as a fraction of full scale.
-     * High enough that the sheet is a visible lawn, low enough that a signal
-     * above the knee still stands clear of it.
+     * Bright green-cyan lawn, yellow tips, then orange and red. The floor stop
+     * is already a lawn colour: a dark teal there is what made the sheet look unlit.
      */
-    private const val FLOOR_SHEET = 0.20f
+    private val AETHER_RGB = intArrayOf(0x2AD4A4, 0x7AF06A, 0xE6F25A, 0xFFE23A, 0xFF8A1A, 0xFF2E12)
 
-    private val AETHER_AT = floatArrayOf(0f, 0.16f, 0.38f, 0.60f, 0.80f, 1f)
+    private val FT_AT = floatArrayOf(0f, 0.16f, 0.38f, 0.68f, 1f)
 
-    /** Deep teal floor, green body, yellow, orange, red peak. The AetherSDR lawn. */
-    private val AETHER_RGB = intArrayOf(0x072E36, 0x0E7A4E, 0x3AD15A, 0xE4DC38, 0xF09A1C, 0xFF3A16)
+    /** Bright cyan lawn to a white crest. The FT-710 3DSS, without the navy floor. */
+    private val FT_RGB = intArrayOf(0x28B8E4, 0x6AD8F4, 0xC8F4FF, 0xF4FCFF, 0xFFFFFF)
+}
 
-    private val FT_AT = floatArrayOf(0f, 0.18f, 0.42f, 0.68f, 1f)
+/**
+ * The 3D vertical scale, separate from the waterfall's window.
+ *
+ * The floor follows the quiet end of the frame. The ceiling follows the loud
+ * end, and it rises quickly so a new carrier is not clipped while the scale
+ * catches up. It falls slowly, so one quiet frame does not collapse the peaks.
+ * A quiet band is held open by [SpectrumRidge.MIN_SPAN_DB], which gives the
+ * grass room to show a few dB of texture.
+ *
+ * The histogram is the one allocated here. [update] does not allocate.
+ */
+class RidgeRange {
+    var floorDb: Float = -120f
+        private set
+    var ceilingDb: Float = -120f + SpectrumRidge.MIN_SPAN_DB
+        private set
 
-    /** Navy floor, blue, cyan, white crest. The FT-710 3DSS. */
-    private val FT_RGB = intArrayOf(0x04101C, 0x0A3C78, 0x1498C4, 0x8EE6F6, 0xF6FCFF)
+    private val hist = IntArray(256)
+    private var primed = false
+
+    fun reset() {
+        primed = false
+    }
+
+    fun update(db: ByteArray, length: Int): Pair<Float, Float> {
+        val n = length.coerceIn(0, db.size)
+        if (n == 0) return floorDb to ceilingDb
+        hist.fill(0)
+        var maxDb = -128
+        for (i in 0 until n) {
+            val v = db[i].toInt()
+            hist[v + 128]++
+            if (v > maxDb) maxDb = v
+        }
+        val noise = percentile(n, 0.12f).toFloat()
+        val loud = max(percentile(n, 0.998f), maxDb).toFloat()
+        val floorTarget = noise
+        val ceilTarget = max(loud, floorTarget + SpectrumRidge.MIN_SPAN_DB)
+        if (!primed) {
+            floorDb = floorTarget
+            ceilingDb = ceilTarget
+            primed = true
+        } else {
+            floorDb = glide(floorDb, floorTarget, FOLLOW_FLOOR)
+            val follow = if (ceilTarget > ceilingDb) FOLLOW_UP else FOLLOW_DOWN
+            ceilingDb = glide(ceilingDb, ceilTarget, follow)
+            if (ceilingDb < floorDb + SpectrumRidge.MIN_SPAN_DB) {
+                ceilingDb = floorDb + SpectrumRidge.MIN_SPAN_DB
+            }
+        }
+        return floorDb to ceilingDb
+    }
+
+    /** [fraction] of the way through the bins, from the quiet end. */
+    private fun percentile(n: Int, fraction: Float): Int {
+        val target = ((n - 1) * fraction).roundToInt().coerceIn(0, n - 1)
+        var seen = 0
+        for (i in hist.indices) {
+            seen += hist[i]
+            if (seen > target) return i - 128
+        }
+        return 127
+    }
+
+    private fun glide(current: Float, target: Float, follow: Float): Float {
+        if (current == target) return current
+        return current + (target - current) * follow
+    }
+
+    private companion object {
+        const val FOLLOW_FLOOR = 0.22f
+        const val FOLLOW_UP = 0.75f
+        const val FOLLOW_DOWN = 0.08f
+    }
 }
 
 /**

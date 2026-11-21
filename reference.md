@@ -256,3 +256,25 @@ What changed:
 - The service type is `connectedDevice`, plus `mediaPlayback` only while receiver audio is playing. Android 15 stops a media-playback foreground service that is not playing. There is no microphone type.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **196 tests, 0 failures, 0 errors** (`BackgroundRunTest`, 8). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so background audio was not heard on a device. Android can still freeze the process under battery optimization; Setup opens the system list and does not request the exemption itself.
+
+## 3D lawn, after the 77ec5cf emulator check
+
+Images of `77ec5cf`: the carrier at 14.100 is a white line in the waterfall and is absent from the 3D surface. The surface is a dark flat sheet, and a band of black sits above the vanishing point.
+
+Causes:
+
+- A ridge was 96 samples across 1024 bins. The sample was the bin at the column centre, so a one-bin carrier between two centres was never read.
+- `shapeLevel` squared everything below 0.36 of the window into a sheet. On a 36 dB window that is the first 13 dB, which is where a real signal lives.
+- The floor colour was `#072E36`. Fog of 0.62 took the back row down to about 38% of that, which reads as black.
+- Rise 0.66 left the oldest baseline a third of the way down the pane. Inset 0.38 pulled the sides in until the vanishing point sat in that black.
+
+What changed, 3D only. The waterfall window, PTT, the lease, `PanelEventBus`, background mode, and the layout preference are the same.
+
+- Each column keeps the loudest bin in its slice (`columnPeakDb`). 256 columns, so the carrier is a narrow ridge.
+- `RidgeRange` is the 3D scale. The floor eases to the quiet end. The ceiling eases up quickly to the loud end and down slowly, and a quiet band stays at least 12 dB wide so the grass has texture. It does not use the waterfall's window.
+- The first 8 dB above the floor are drawn in proportion (`GRASS_HEIGHT` 0.22). Past that the level runs to full scale at the ceiling. Spatial and temporal smoothing touch only that grass. A column above it is copied.
+- The lawn colours start at a bright green-cyan and go yellow, orange, red. The FT-710 style starts at a bright cyan and goes to white. Fog is 0.50, so the oldest row is half as bright and still a colour.
+- Inset is 0.10 and rise is 0.92. The oldest baseline is near the top of the pane. The sides meet above the pane.
+- No second-finger gain. Pinch already uses two fingers, and a drag tunes. The auto-range is the vertical control.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **197 tests, 0 failures, 0 errors**. `aCarrierThirtyDbAboveTheFloorReachesMostOfThePane` requires a +30 dB bin to rise at least 60% of the pane on the first range update. No emulator here, so this look was not re-shot.
