@@ -16,7 +16,9 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -445,10 +447,10 @@ private fun FreqPart(
  * the finger, or to a spot when the tap lands within [RadioFace.slopHz] of one. Those gestures
  * are the canvas, so they work on the 2D trace and on the 3D ridges.
  *
- * The 3D plot is the AetherSDR ridge view: the last [SpectrumRidge.DEPTH] frames, newest in
- * front, each one shifted up and in. The chip beside the palette switches it. 2D stays the
- * default until that chip is used.
+ * The 3D plot is a solid surface, newest ridge in front: the AetherSDR lawn, or the FT-710
+ * 3DSS cyan-to-white look on a long-press of the same chip. 2D stays the default.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SpectrumStack(
     spectrum: StateFlow<SpectrumFrame?>,
@@ -468,10 +470,8 @@ fun SpectrumStack(
     // row per pixel instead of stretching 48 rows into blocks.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
     val ridgeRing = remember { SpectrumRidgeRing() }
-    val ridgeFill = remember { Path() }
-    val ridgeStrokes = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
+    val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
     val ridgeScratch = remember { RidgeScratch() }
-    val ridgeStroke = remember { Stroke(width = 1.35f, cap = StrokeCap.Round) }
     val leveler = remember { WaterfallLeveler() }
     val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
@@ -481,7 +481,9 @@ fun SpectrumStack(
     val context = LocalContext.current
     val viewPreference = remember { SpectrumViewPreference(context) }
     var viewStored by rememberSaveable { mutableStateOf(viewPreference.read().stored) }
+    var styleStored by rememberSaveable { mutableStateOf(viewPreference.readStyle().stored) }
     val spectrumView = SpectrumView.fromStored(viewStored)
+    val ridgeStyle = RidgeStyle.fromStored(styleStored)
     val ridge = spectrumView == SpectrumView.RIDGE
     val colormap = WfColormap.entries.firstOrNull { it.name == mapName } ?: WfColormap.GAUSS
     val colors = remember(colormap) { WaterfallDisplay.palette(colormap) }
@@ -614,14 +616,11 @@ fun SpectrumStack(
             if (spectrumFrame == null || spectrumFrame.bins <= 0) {
                 drawLine(RfGuru.dim, Offset(0f, specH / 2f), Offset(size.width, specH / 2f), strokeWidth = 1f)
             } else if (ridge) {
-                // Newest ridge in front. Each one is filled to its baseline first, so the nearer
-                // polygon covers the ridges already drawn behind it, then stroked by level.
                 drawRidgePlot(
                     ring = ridgeRing,
-                    fill = ridgeFill,
-                    strokes = ridgeStrokes,
+                    fills = ridgeFills,
                     scratch = ridgeScratch,
-                    stroke = ridgeStroke,
+                    style = ridgeStyle,
                     specH = specH,
                     viewWidth = size.width,
                     floor = window.first,
@@ -780,37 +779,56 @@ fun SpectrumStack(
                     .semantics { contentDescription = "Waterfall colours ${colormap.label}. Tap for the next palette" },
             )
             Text(
-                text = spectrumView.chip,
+                text = SpectrumRidge.chipLabel(spectrumView, ridgeStyle),
                 color = RfGuru.goldText,
                 fontSize = 11.sp,
                 fontFamily = Mono,
                 modifier = Modifier
                     .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
-                    .clickable {
-                        val next = spectrumView.next()
-                        viewStored = next.stored
-                        viewPreference.write(next)
-                    }
+                    .combinedClickable(
+                        onClick = {
+                            val next = spectrumView.next()
+                            viewStored = next.stored
+                            viewPreference.write(next)
+                        },
+                        onLongClick = {
+                            // The second 3D colour. Holding the chip swaps the lawn for the
+                            // FT-710 cyan stream, and opens 3D if the trace was showing.
+                            val next = ridgeStyle.next()
+                            styleStored = next.stored
+                            viewPreference.writeStyle(next)
+                            if (spectrumView == SpectrumView.TRACE) {
+                                viewStored = SpectrumView.RIDGE.stored
+                                viewPreference.write(SpectrumView.RIDGE)
+                            }
+                        },
+                    )
                     .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .semantics { contentDescription = "Spectrum view ${spectrumView.chip}. Tap to switch between 2D and 3D" },
+                    .semantics {
+                        contentDescription = "Spectrum view ${SpectrumRidge.chipLabel(spectrumView, ridgeStyle)}. Tap for 2D or 3D. Hold for the other 3D colours"
+                    },
             )
         }
     }
 }
 
 /**
- * Stacked ridges, back to front.
+ * Solid ridges, oldest first.
  *
- * The samples are the 2D trace's interpolation, leveled with the same floor and ceiling,
- * so a quiet band does not jump colour every frame. Paths and the scratch buffers belong
- * to the pane and are rewound, not allocated, here.
+ * Each column is a wall from that row's baseline up to the signal, filled with the colour
+ * of its level. Columns of one colour share a path, so a quiet row is one polygon and a
+ * busy row is a handful, not a line per sample. The fill is opaque and fogged by age:
+ * the nearer wall covers the one behind it, and the back of the stream is darker.
+ *
+ * On a mid-range phone this is about sixty rows times eight paths, once per spectrum
+ * frame (the radio sends at most ~15 a second). The paths and the sample buffers are
+ * the ones the pane allocated.
  */
 private fun DrawScope.drawRidgePlot(
     ring: SpectrumRidgeRing,
-    fill: Path,
-    strokes: Array<Path>,
+    fills: Array<Path>,
     scratch: RidgeScratch,
-    stroke: Stroke,
+    style: RidgeStyle,
     specH: Float,
     viewWidth: Float,
     floor: Int,
@@ -821,42 +839,86 @@ private fun DrawScope.drawRidgePlot(
     if (specH < 2f || viewWidth < 2f || ring.count <= 0 || viewWidthHz <= 0) return
     val span = (ceiling - floor).coerceAtLeast(1).toFloat()
     val samples = scratch.x.size
-    // Oldest first. The fill of a nearer ridge then covers what is behind it.
+    val depth = ring.depth
+    var haveOlder = false
+    var olderCentre = 0
+    var olderWidth = 0
+    // Oldest first. The opaque wall of a nearer ridge then covers what is behind it.
     for (age in ring.count - 1 downTo 0) {
         val row = ring.dbAt(age)
         val rowBins = ring.lengthAt(age)
         val rowCentre = ring.centreAt(age)
         val rowWidth = ring.widthAt(age)
         if (rowBins <= 0 || rowWidth <= 0) continue
-        val baseline = SpectrumRidge.projectY(age, ring.depth, 0f, specH)
         for (i in 0 until samples) {
             val hz = WaterfallDisplay.hzAtPixel(i, samples, viewCentreHz, viewWidthHz)
             val index = WaterfallDisplay.binAtHz(hz, rowCentre, rowWidth, rowBins)
             val db = WaterfallDisplay.sampleBin(row, index, rowBins) ?: floor.toFloat()
-            val level = ((db - floor) / span).coerceIn(0f, 1f)
-            scratch.level[i] = level
-            scratch.x[i] = SpectrumRidge.projectX(i, samples, age, ring.depth, viewWidth)
-            scratch.y[i] = SpectrumRidge.projectY(age, ring.depth, level, specH)
+            scratch.level[i] = SpectrumRidge.shapeLevel(((db - floor) / span).coerceIn(0f, 1f))
         }
-        fill.rewind()
-        fill.moveTo(scratch.x[0], scratch.y[0])
-        for (i in 1 until samples) fill.lineTo(scratch.x[i], scratch.y[i])
-        fill.lineTo(scratch.x[samples - 1], baseline)
-        fill.lineTo(scratch.x[0], baseline)
-        fill.close()
-        for (path in strokes) path.rewind()
-        for (i in 0 until samples - 1) {
-            val step = SpectrumRidge.colorStep(maxOf(scratch.level[i], scratch.level[i + 1]))
-            val path = strokes[step]
-            path.moveTo(scratch.x[i], scratch.y[i])
-            path.lineTo(scratch.x[i + 1], scratch.y[i + 1])
+        SpectrumRidge.smoothSpatial(scratch.level, scratch.shaped, samples)
+        val sameSpan = haveOlder && olderCentre == rowCentre && olderWidth == rowWidth
+        if (sameSpan) {
+            for (i in 0 until samples) {
+                scratch.level[i] = SpectrumRidge.smoothTemporal(scratch.shaped[i], scratch.older[i])
+            }
+        } else {
+            for (i in 0 until samples) scratch.level[i] = scratch.shaped[i]
         }
-        // Opaque, the pane's own black. A translucent fill would leave the older ridges showing
-        // through the body of the nearer one, and the plot would read as a tangle of lines.
-        drawPath(fill, Color.Black)
-        for (step in strokes.indices) {
-            drawPath(strokes[step], packedArgb(SpectrumRidge.stepArgb(step)), style = stroke)
+        for (i in 0 until samples) {
+            scratch.older[i] = scratch.shaped[i]
+            scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth)
+            scratch.y[i] = SpectrumRidge.projectY(age, depth, scratch.level[i], specH)
         }
+        haveOlder = true
+        olderCentre = rowCentre
+        olderWidth = rowWidth
+        val baseline = SpectrumRidge.projectY(age, depth, 0f, specH)
+        for (path in fills) path.rewind()
+        // A run of columns that share a colour is one polygon: up the left side, along the
+        // crest, down the right side, and back along the baseline.
+        var start = 0
+        while (start < samples - 1) {
+            val step = SpectrumRidge.colorStep(maxOf(scratch.level[start], scratch.level[start + 1]))
+            var end = start + 1
+            while (end < samples - 1 &&
+                SpectrumRidge.colorStep(maxOf(scratch.level[end], scratch.level[end + 1])) == step
+            ) {
+                end++
+            }
+            val path = fills[step]
+            path.moveTo(scratch.x[start], baseline)
+            for (k in start..end) path.lineTo(scratch.x[k], scratch.y[k])
+            path.lineTo(scratch.x[end], baseline)
+            path.close()
+            start = end
+        }
+        for (step in fills.indices) {
+            val color = SpectrumRidge.fogArgb(SpectrumRidge.stepArgb(step, style), age, depth)
+            drawPath(fills[step], packedArgb(color))
+        }
+    }
+    drawRidgeGrid(samples, depth, viewWidth, specH)
+}
+
+/** Frequency lines run to the vanishing point. Time lines follow the floor of every sixteenth row. */
+private fun DrawScope.drawRidgeGrid(samples: Int, depth: Int, width: Float, height: Float) {
+    val color = packedArgb(SpectrumRidge.GRID_ARGB)
+    val marks = intArrayOf(samples / 4, samples / 2, (samples * 3) / 4)
+    for (i in marks) {
+        val x0 = SpectrumRidge.projectX(i, samples, 0, depth, width)
+        val y0 = SpectrumRidge.projectY(0, depth, 0f, height)
+        val x1 = SpectrumRidge.projectX(i, samples, depth - 1, depth, width)
+        val y1 = SpectrumRidge.projectY(depth - 1, depth, 0f, height)
+        drawLine(color, Offset(x0, y0), Offset(x1, y1), strokeWidth = 1f)
+    }
+    var age = 16
+    while (age < depth) {
+        val y = SpectrumRidge.projectY(age, depth, 0f, height)
+        val xL = SpectrumRidge.projectX(0, samples, age, depth, width)
+        val xR = SpectrumRidge.projectX(samples - 1, samples, age, depth, width)
+        drawLine(color, Offset(xL, y), Offset(xR, y), strokeWidth = 1f)
+        age += 16
     }
 }
 
