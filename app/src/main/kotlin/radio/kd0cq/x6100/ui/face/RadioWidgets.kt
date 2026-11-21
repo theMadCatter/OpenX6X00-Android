@@ -469,7 +469,8 @@ fun SpectrumStack(
     // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
     // row per pixel instead of stretching 48 rows into blocks.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
-    val ridgeRing = remember { SpectrumRidgeRing() }
+    // The ring holds the full-scope depth. A combined pane only draws the front DEPTH rows.
+    val ridgeRing = remember { SpectrumRidgeRing(SpectrumRidge.MAX_DEPTH) }
     val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
     val ridgeScratch = remember { RidgeScratch() }
     val leveler = remember { WaterfallLeveler() }
@@ -482,8 +483,10 @@ fun SpectrumStack(
     val viewPreference = remember { SpectrumViewPreference(context) }
     var viewStored by rememberSaveable { mutableStateOf(viewPreference.read().stored) }
     var styleStored by rememberSaveable { mutableStateOf(viewPreference.readStyle().stored) }
+    var layoutStored by rememberSaveable { mutableStateOf(viewPreference.readLayout().stored) }
     val spectrumView = SpectrumView.fromStored(viewStored)
     val ridgeStyle = RidgeStyle.fromStored(styleStored)
+    val scopeLayout = ScopeLayout.fromStored(layoutStored)
     val ridge = spectrumView == SpectrumView.RIDGE
     val colormap = WfColormap.entries.firstOrNull { it.name == mapName } ?: WfColormap.GAUSS
     val colors = remember(colormap) { WaterfallDisplay.palette(colormap) }
@@ -530,9 +533,11 @@ fun SpectrumStack(
         val scalePx = with(density) { 16.dp.toPx() }
         val planPx = with(density) { 14.dp.toPx() }
         val guardPx = with(density) { 24.dp.toPx() }
-        LaunchedEffect(paneWidth, paneHeight, ridge, waterfallShare, scalePx, planPx, guardPx) {
+        LaunchedEffect(paneWidth, paneHeight, ridge, waterfallShare, scalePx, planPx, guardPx, scopeLayout) {
             if (paneWidth <= 0 || paneHeight <= 0) return@LaunchedEffect
-            val split = RadioFace.scopeSplit(paneHeight.toFloat(), scalePx, planPx, waterfallShare, guardPx, ridge)
+            val split = RadioFace.scopeSplit(
+                paneHeight.toFloat(), scalePx, planPx, waterfallShare, guardPx, ridge, scopeLayout,
+            )
             val rowsHigh = split.waterfallPx.roundToInt().coerceIn(1, WaterfallDisplay.MAX_ROWS)
             waterRows = rowsHigh
             history.resize(rowsHigh)
@@ -607,13 +612,17 @@ fun SpectrumStack(
             // Zoom sits in the top-right of the trace. The split keeps that band at least as
             // tall as the chip, so "Zoom x1" cannot land on the last frequency tick.
             val zoomGuard = 24.dp.toPx()
-            val split = RadioFace.scopeSplit(size.height, scaleH, planH, waterfallShare, zoomGuard, ridge)
+            val split = RadioFace.scopeSplit(
+                size.height, scaleH, planH, waterfallShare, zoomGuard, ridge, scopeLayout,
+            )
             val specH = split.spectrumPx
             val waterTop = specH + scaleH + planH
             val waterH = split.waterfallPx
 
             val spectrumFrame = frame
-            if (spectrumFrame == null || spectrumFrame.bins <= 0) {
+            if (scopeLayout == ScopeLayout.WATERFALL || specH < 2f) {
+                // The waterfall has the pane. The scale and the plan are still drawn below.
+            } else if (spectrumFrame == null || spectrumFrame.bins <= 0) {
                 drawLine(RfGuru.dim, Offset(0f, specH / 2f), Offset(size.width, specH / 2f), strokeWidth = 1f)
             } else if (ridge) {
                 drawRidgePlot(
@@ -724,13 +733,15 @@ fun SpectrumStack(
                     val vfoX = RadioFace.fractionForHz(radio.freqHz, hzSpan).coerceIn(0f, 1f) * size.width
                     drawLine(packedArgb(RadioFace.VFO_LINE_ARGB), Offset(vfoX, 0f), Offset(vfoX, size.height), strokeWidth = 2f)
                 }
+                // With no waterfall, the labels sit in the spectrum just above the scale.
+                val spotTop = if (waterH > 8f) waterTop else (specH - 28f).coerceAtLeast(0f)
                 spots.forEach { spot ->
                     val x = RadioFace.fractionForHz(spot.freqHz, hzSpan) * size.width
                     if (x < -8f || x > size.width + 8f) return@forEach
-                    drawLine(RfGuru.blue.copy(alpha = 0.7f), Offset(x, waterTop), Offset(x, waterTop + 10f), strokeWidth = 1f)
+                    drawLine(RfGuru.blue.copy(alpha = 0.7f), Offset(x, spotTop), Offset(x, spotTop + 10f), strokeWidth = 1f)
                     val measured = measurer.measure(spot.call, if (spot.alert) alertStyle else spotStyle)
                     val left = (x - measured.size.width / 2f).coerceIn(0f, (size.width - measured.size.width).coerceAtLeast(0f))
-                    drawText(measured, topLeft = Offset(left, waterTop + 10f))
+                    drawText(measured, topLeft = Offset(left, spotTop + 10f))
                 }
             }
 
@@ -808,6 +819,23 @@ fun SpectrumStack(
                         contentDescription = "Spectrum view ${SpectrumRidge.chipLabel(spectrumView, ridgeStyle)}. Tap for 2D or 3D. Hold for the other 3D colours"
                     },
             )
+            Text(
+                text = scopeLayout.chip,
+                color = RfGuru.goldText,
+                fontSize = 11.sp,
+                fontFamily = Mono,
+                modifier = Modifier
+                    .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
+                    .clickable {
+                        val next = scopeLayout.next()
+                        layoutStored = next.stored
+                        viewPreference.writeLayout(next)
+                    }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .semantics {
+                        contentDescription = "Scope layout ${scopeLayout.chip}. Tap to cycle spectrum and waterfall, spectrum only, or waterfall only"
+                    },
+            )
         }
     }
 }
@@ -839,12 +867,16 @@ private fun DrawScope.drawRidgePlot(
     if (specH < 2f || viewWidth < 2f || ring.count <= 0 || viewWidthHz <= 0) return
     val span = (ceiling - floor).coerceAtLeast(1).toFloat()
     val samples = scratch.x.size
-    val depth = ring.depth
+    // A tall spectrum-only pane draws more ridges, and a slightly taller peak fraction.
+    // Using the ring's full depth here would squash that history into the short combined pane.
+    val depth = SpectrumRidge.rowsForHeight(specH).coerceAtMost(ring.depth)
+    val amplitude = SpectrumRidge.amplitudeFor(specH)
+    val shown = minOf(ring.count, depth)
     var haveOlder = false
     var olderCentre = 0
     var olderWidth = 0
     // Oldest first. The opaque wall of a nearer ridge then covers what is behind it.
-    for (age in ring.count - 1 downTo 0) {
+    for (age in shown - 1 downTo 0) {
         val row = ring.dbAt(age)
         val rowBins = ring.lengthAt(age)
         val rowCentre = ring.centreAt(age)
@@ -868,7 +900,7 @@ private fun DrawScope.drawRidgePlot(
         for (i in 0 until samples) {
             scratch.older[i] = scratch.shaped[i]
             scratch.x[i] = SpectrumRidge.projectX(i, samples, age, depth, viewWidth)
-            scratch.y[i] = SpectrumRidge.projectY(age, depth, scratch.level[i], specH)
+            scratch.y[i] = SpectrumRidge.projectY(age, depth, scratch.level[i], specH, amplitude = amplitude)
         }
         haveOlder = true
         olderCentre = rowCentre

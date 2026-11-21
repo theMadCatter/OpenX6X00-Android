@@ -154,6 +154,26 @@ class SpectrumRidgeTest {
     }
 
     @Test
+    fun aFullScopePaneAddsRowsAndRaisesThePeak() {
+        // A short combined pane keeps the usual depth. The spectrum-only pane is several
+        // times taller: it draws more ridges, and a full-scale peak is taller in pixels,
+        // while the peak fraction itself barely moves. The new height is rows, not a blow-up.
+        val short = 90f
+        val tall = 420f
+        assertEquals(SpectrumRidge.DEPTH, SpectrumRidge.rowsForHeight(short))
+        val tallRows = SpectrumRidge.rowsForHeight(tall)
+        assertTrue(tallRows > SpectrumRidge.DEPTH)
+        assertTrue(tallRows <= SpectrumRidge.MAX_DEPTH)
+        val shortLift = short * SpectrumRidge.amplitudeFor(short)
+        val tallLift = tall * SpectrumRidge.amplitudeFor(tall)
+        assertTrue(tallLift > shortLift * 3f)
+        assertTrue(SpectrumRidge.amplitudeFor(tall) - SpectrumRidge.amplitudeFor(short) < 0.12f)
+        val shortPeak = SpectrumRidge.projectY(0, SpectrumRidge.rowsForHeight(short), 1f, short, amplitude = SpectrumRidge.amplitudeFor(short))
+        val tallPeak = SpectrumRidge.projectY(0, tallRows, 1f, tall, amplitude = SpectrumRidge.amplitudeFor(tall))
+        assertTrue(tall - tallPeak > (short - shortPeak) * 3f)
+    }
+
+    @Test
     fun ringKeepsTheNewestFramesAndDoesNotShareTheCallerBuffer() {
         val ring = SpectrumRidgeRing(depth = 4, bins = 8)
         val quiet = ByteArray(8) { -100 }

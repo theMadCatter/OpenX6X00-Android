@@ -231,3 +231,15 @@ What changed, and the choices:
 - The red line in the shot is the VFO, drawn after the surface, and it stays. So do the scale, the band plan, the passband, drag-to-tune, and pinch-zoom. PTT, the lease, and `PanelEventBus` were not touched.
 
 `./gradlew testDebugUnitTest assembleDebug` after this pass: **186 tests, 0 failures, 0 errors** (`SpectrumRidgeTest` is 9: the knee, the peak-preserving smooth, the fog, and the FT-710 ramp). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so the solid surface was not re-shot.
+
+## Scope layout (spectrum by itself)
+
+Chris Fink (KD0CQ) wants the 3D surface, or the 2D trace, to be able to fill the scope with no waterfall under it.
+
+The split always reserved a waterfall band, so the ridges could not use that height. `ScopeLayout` is now `both` (default), `spectrum`, or `waterfall`. It is stored in the same `radio_face` preferences as the 2D/3D choice (`spectrum_layout`). A short chip in the existing row cycles `S+W`, `Spec`, and `WF`, so it does not open a menu over the plot.
+
+Spectrum only gives the trace or the ridges the room above the frequency scale and the band plan. The waterfall pixels are 0. Waterfall only does the reverse. The scale, the band plan, the VFO line, the passband, drag-to-tune, and pinch-zoom stay in every layout.
+
+A taller spectrum pane does not blow the same 64 ridges up. `rowsForHeight` stays at 64 while the pane is the short combined strip, and climbs toward 128 (one row per about 3.5 px) when the spectrum has the whole scope. `amplitudeFor` keeps the peak fraction near 0.78 and adds at most 0.10, so the crest is taller in pixels and most of the new height is extra rows. The ring is allocated at 128 once.
+
+`./gradlew testDebugUnitTest assembleDebug` after this pass: **188 tests, 0 failures, 0 errors** (`scopeLayoutGivesTheWholeRoomToOnePane`, `aFullScopePaneAddsRowsAndRaisesThePeak`). `assembleDebug`: BUILD SUCCESSFUL. No emulator here, so the full-scope 3D view was not re-shot.

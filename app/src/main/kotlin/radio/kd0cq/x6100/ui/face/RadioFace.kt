@@ -522,6 +522,8 @@ object RadioFace {
      * A share of 0 is the portrait split: the trace is 40% of the room left after the scale and plan.
      * [ridge] gives the 3D plot a little of that room back. The ridges need the height; the
      * waterfall stays the larger part of a landscape pane.
+     * [layout] can give the whole room to the spectrum or to the waterfall. The scale and
+     * the band plan are outside that room, so they stay either way.
      */
     data class ScopeSplit(val spectrumPx: Float, val waterfallPx: Float)
 
@@ -532,9 +534,12 @@ object RadioFace {
         waterfallShare: Float,
         zoomGuardPx: Float,
         ridge: Boolean = false,
+        layout: ScopeLayout = ScopeLayout.BOTH,
     ): ScopeSplit {
         if (heightPx <= 0f) return ScopeSplit(0f, 0f)
         val room = (heightPx - scalePx - planPx).coerceAtLeast(0f)
+        if (layout == ScopeLayout.SPECTRUM) return ScopeSplit(room, 0f)
+        if (layout == ScopeLayout.WATERFALL) return ScopeSplit(0f, room)
         val spectrum = if (waterfallShare <= 0f) {
             val fraction = if (ridge) 0.55f else 0.40f
             maxOf(room * fraction, minOf(zoomGuardPx, room))

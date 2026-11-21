@@ -33,9 +33,17 @@ class SpectrumViewPreference(context: Context) {
         prefs.edit().putString(KEY_STYLE, style.stored).apply()
     }
 
+    /** Combined spectrum and waterfall until the layout chip says otherwise. */
+    fun readLayout(): ScopeLayout = ScopeLayout.fromStored(prefs.getString(KEY_LAYOUT, null))
+
+    fun writeLayout(layout: ScopeLayout) {
+        prefs.edit().putString(KEY_LAYOUT, layout.stored).apply()
+    }
+
     private companion object {
         const val FILE = "radio_face"
         const val KEY = "spectrum_view"
         const val KEY_STYLE = "spectrum_style"
+        const val KEY_LAYOUT = "spectrum_layout"
     }
 }
