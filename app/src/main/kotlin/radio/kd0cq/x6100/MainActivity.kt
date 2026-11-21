@@ -26,6 +26,7 @@ import radio.kd0cq.x6100.ui.AppNav
 import radio.kd0cq.x6100.ui.RadioViewModel
 import radio.kd0cq.x6100.ui.face.DigitKeys
 import radio.kd0cq.x6100.ui.face.FaceChoices
+import radio.kd0cq.x6100.ui.face.SpectrumChoices
 import radio.kd0cq.x6100.ui.theme.OpenX6X00Theme
 
 /**
@@ -51,6 +52,10 @@ class MainActivity : ComponentActivity() {
         // Build the shared link before any screen reads its flows; the service starts it later.
         RadioLinks.link(application)
         FaceChoices.load(application)
+        // Same file as the sunlight flag. Done before setContent so the first
+        // frame, including the landscape face after a rotation, already has the
+        // stored 2D / 3D choice instead of the default trace.
+        SpectrumChoices.load(application)
         askAboutNotifications()
         setContent {
             OpenX6X00Theme {

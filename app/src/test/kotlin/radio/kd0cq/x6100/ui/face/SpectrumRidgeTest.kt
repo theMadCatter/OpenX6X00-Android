@@ -111,6 +111,41 @@ class SpectrumRidgeTest {
     }
 
     @Test
+    fun theSelectedViewSurvivesRotationAndEveryLayout() {
+        // Portrait stored FT 3D and spectrum-only. The landscape face is a new
+        // memory that reads those three strings. It does not start at 2D, and
+        // walking the layout chip does not rewrite the view.
+        val portrait = SpectrumMemory()
+        portrait.selectView(SpectrumView.RIDGE)
+        portrait.selectStyle(RidgeStyle.FT710)
+        portrait.selectLayout(ScopeLayout.SPECTRUM)
+        assertEquals("FT", SpectrumRidge.chipLabel(portrait.view, portrait.style))
+
+        val landscape = SpectrumMemory()
+        landscape.applyStored(portrait.view.stored, portrait.style.stored, portrait.layout.stored)
+        assertEquals(SpectrumView.RIDGE, landscape.view)
+        assertEquals(RidgeStyle.FT710, landscape.style)
+        assertEquals(ScopeLayout.SPECTRUM, landscape.layout)
+        assertEquals("FT", SpectrumRidge.chipLabel(landscape.view, landscape.style))
+
+        for (layout in ScopeLayout.entries) {
+            landscape.selectLayout(layout)
+            assertEquals(SpectrumView.RIDGE, landscape.view)
+            assertEquals(RidgeStyle.FT710, landscape.style)
+            assertEquals("FT", SpectrumRidge.chipLabel(landscape.view, landscape.style))
+            assertEquals(layout, landscape.layout)
+        }
+        // A missing view is still the trace. A stored 3D view is not.
+        val fresh = SpectrumMemory()
+        fresh.applyStored(null, null, null)
+        assertEquals(SpectrumView.TRACE, fresh.view)
+        fresh.applyStored("3d", "ft710", "waterfall")
+        assertEquals(SpectrumView.RIDGE, fresh.view)
+        assertEquals(RidgeStyle.FT710, fresh.style)
+        assertEquals(ScopeLayout.WATERFALL, fresh.layout)
+    }
+
+    @Test
     fun grassKeepsItsTextureAndASignalStandsUp() {
         val span = SpectrumRidge.MIN_SPAN_DB
         assertEquals(0f, SpectrumRidge.shapeDb(0f, span), 0.001f)

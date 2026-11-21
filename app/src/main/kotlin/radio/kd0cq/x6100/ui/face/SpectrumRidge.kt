@@ -646,6 +646,52 @@ object SpectrumRidge {
 }
 
 /**
+ * The 2D / 3D choice, the ridge colours, and the scope layout, as one object.
+ *
+ * Portrait and landscape each used to remember their own copy. The landscape
+ * copy was whatever that pane had first composed, so a rotation back to a wide
+ * spectrum-only face put the chip on 2D even though `spectrum_view` already
+ * said 3D. Changing the layout writes only the layout. A new face applies the
+ * three stored strings and does not start over at the 2D default.
+ */
+class SpectrumMemory(
+    view: SpectrumView = SpectrumView.TRACE,
+    style: RidgeStyle = RidgeStyle.AETHER,
+    layout: ScopeLayout = ScopeLayout.BOTH,
+) {
+    var view: SpectrumView = view
+        private set
+    var style: RidgeStyle = style
+        private set
+    var layout: ScopeLayout = layout
+        private set
+
+    fun selectView(next: SpectrumView) {
+        view = next
+    }
+
+    fun selectStyle(next: RidgeStyle) {
+        style = next
+    }
+
+    /** The layout chip. The view and the colours stay where the operator left them. */
+    fun selectLayout(next: ScopeLayout) {
+        layout = next
+    }
+
+    /**
+     * What a new composition does with the three preference strings. An unknown
+     * view is 2D, an unknown style is Aether, and an unknown layout is both
+     * panes. A known view is kept in every layout.
+     */
+    fun applyStored(view: String?, style: String?, layout: String?) {
+        this.view = SpectrumView.fromStored(view)
+        this.style = RidgeStyle.fromStored(style)
+        this.layout = ScopeLayout.fromStored(layout)
+    }
+}
+
+/**
  * The 3D vertical scale, separate from the waterfall's window.
  *
  * The floor follows the quiet end of the frame. The ceiling follows the loud
