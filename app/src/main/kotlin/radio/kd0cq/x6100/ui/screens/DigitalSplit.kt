@@ -2,20 +2,16 @@
 // Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The phone layout for a digital app the radio draws as a waterfall over a list.
+// The phone layout for the JS8 window only.
 //
-// Before this, JS8 was one column: a fixed waterfall, then every control, then
-// the list with weight. On a tall phone the controls used the height and the
-// list was a sliver. On a short landscape phone the column was taller than
-// the screen and did not scroll, so everything under the waterfall was clipped.
-// Weight inside an unbounded scroll does not work either: the list is given
-// no height and Compose throws.
+// src/js8_window.c stacks a lane, a short clear waterfall, a TX line and then
+// the message list. On a tall phone that list was a sliver under the controls.
+// On a short landscape phone the column was taller than the screen and did
+// not scroll. This split gives the list the leftover height, and on a wide
+// window puts the waterfall beside the list.
 //
-// Portrait keeps the radio's order (waterfall, then the list, then the
-// controls) and caps the control block, so the list is the piece that grows
-// and the piece that scrolls. Landscape puts the waterfall on the left and
-// the list plus the controls on the right, which is the same information
-// with the two panes the short window can actually show.
+// FT8, WeFax and CW do not use this. Each of those is drawn by its own
+// firmware file, and copying this split made them look like JS8.
 
 package radio.kd0cq.x6100.ui.screens
 
@@ -65,9 +61,8 @@ fun DigitalSplit(
     list: @Composable (Modifier) -> Unit,
     controls: @Composable () -> Unit,
     /**
-     * JS8 and FT8 keep a short waterfall and give the list the leftover
-     * height, which is how those windows are built. WeFax is the chart, so
-     * the picture takes the leftover height instead.
+     * The JS8 list takes the leftover height. [pictureGrows] is unused by
+     * that window and is kept so a caller that already passed it still builds.
      */
     pictureGrows: Boolean = false,
     /** Share of a wide window given to the picture. The list gets the rest. */
@@ -126,12 +121,13 @@ fun DigitalSplit(
 data class LaneMark(val hz: Int, val label: String, val color: Color)
 
 /**
- * The JS8 and FT8 app waterfall.
+ * The JS8 app waterfall.
  *
- * The bytes are dB over the noise floor. The radio's palette runs from the
- * floor to 30 dB over it (`WF_MAX_DB` in js8_window.c). A red border is the
- * radio's "on the air" border. The vertical lines are the TX offset and the
- * selected station, which the radio draws with its finder.
+ * The bytes are dB over the noise floor. js8_window.c runs the palette from
+ * the floor to 30 dB over it. A red border is that window's "on the air"
+ * border. The vertical lines are the TX offset and the selected station.
+ * FT8's finder is a band of the signal's width on the main waterfall
+ * palette, drawn by Ft8Screen, not by this picture.
  */
 @Composable
 fun AppWaterfallPicture(

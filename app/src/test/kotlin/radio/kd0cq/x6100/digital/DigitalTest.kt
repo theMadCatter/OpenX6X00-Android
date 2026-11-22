@@ -193,6 +193,71 @@ class DigitalTest {
         )
     }
 
+    @Test
+    fun eachDigitalModeKeepsItsOwnWindow() {
+        assertEquals(
+            listOf(Ft8Key.PAGE, Ft8Key.CQ, Ft8Key.TX_CALL, Ft8Key.SHOW, Ft8Key.VIEW),
+            ft8Page(0),
+        )
+        assertEquals(listOf(Ft8Key.PAGE, Ft8Key.LOG_MAP, Ft8Key.FOR_YOU, null, null), ft8Page(4))
+        assertTrue(ft8KeySends(Ft8Key.CQ))
+        assertTrue(ft8KeySends(Ft8Key.MODE))
+        assertFalse(ft8KeySends(Ft8Key.FREQ))
+        assertFalse(ft8KeySends(Ft8Key.LIVE_MAP))
+        assertFalse(Ft8Look.showKeeps(Ft8Look.CELL_MSG, showAll = false))
+        assertTrue(Ft8Look.showKeeps(Ft8Look.CELL_CQ, showAll = false))
+        assertTrue(Ft8Look.showKeeps(Ft8Look.CELL_TO_ME, showAll = false))
+        assertEquals(1, Ft8Look.signalBars(-24))
+        assertEquals(5, Ft8Look.signalBars(-4))
+        assertEquals(Ft8Look.ERR, Ft8Look.laneInk(toMe = true, cq = false, selected = false))
+        assertEquals(Ft8Look.WARN, Ft8Look.laneInk(toMe = false, cq = true, selected = true))
+        val heard = ft8Heard(
+            listOf(
+                ft8("CQ AA1A", Ft8Look.CELL_CQ).copy(call = "AA1A", freqHz = 800),
+                ft8("KD0CQ W1AW", Ft8Look.CELL_MSG).copy(call = "W1AW", freqHz = 1200),
+                ft8("W1AW KD0CQ", Ft8Look.CELL_TO_ME).copy(call = "W1AW", freqHz = 1400, toMe = true),
+            ),
+            showAll = true,
+        )
+        assertEquals(listOf("W1AW", "AA1A"), heard.map { it.call })
+        assertEquals(1400, heard[0].freqHz)
+        val band = finderBand(1500, 50, 0, 3000, 300f)
+        assertNotNull(band)
+        assertEquals(150f, band!!.first, 0.1f)
+        assertEquals(155f, band.second, 0.1f)
+        assertNull(finderBand(4000, 50, 0, 3000, 300f))
+
+        assertEquals(
+            listOf(FaxKey.PAGE, FaxKey.PLAN, FaxKey.BULLETIN, FaxKey.CHARTS, FaxKey.CLOSE),
+            faxPage(0),
+        )
+        assertEquals(listOf(FaxKey.PAGE, FaxKey.NIGHT, null, null, null), faxPage(3))
+        assertTrue(faxKeySends(FaxKey.RX))
+        assertFalse(faxKeySends(FaxKey.TILT))
+        assertFalse(faxKeySends(FaxKey.BULLETIN))
+        val fax = WeFaxStatus(
+            open = true, auto = true, fax = false, transmitting = false, txPercent = 0,
+            generation = 1, rows = 0, freqHz = 8_035_000, saves = 0, station = "NOAA",
+            saved = "", plan = true, next = "18:00 NOAA 8035.0",
+        )
+        assertEquals("NOAA   8035.0 kHz", WeFaxProtocol.frameLeft(fax))
+        assertEquals("RX Auto   Plan 18:00", WeFaxProtocol.frameRight(fax))
+        assertEquals("Plan\nnext 18:00", WeFaxProtocol.planButton(fax))
+        assertEquals("Auto\nPlan", WeFaxProtocol.planButton(fax.copy(plan = false)))
+        assertNotNull(WeFaxProtocol.idleLines(fax, hasRows = false))
+        assertNull(WeFaxProtocol.idleLines(fax, hasRows = true))
+
+        assertEquals(CwLook.Kind.ABBR, CwLook.kind("CQ"))
+        assertEquals(CwLook.Kind.RST, CwLook.kind("5NN"))
+        assertEquals(CwLook.Kind.CALL, CwLook.kind("KD0CQ"))
+        assertTrue(CwLook.confirmed("CQ CQ DE KD0CQ KD0CQ K", "KD0CQ"))
+        assertFalse(CwLook.confirmed("CQ KD0CQ", "KD0CQ"))
+        assertEquals(CwLook.ACCENT, CwLook.ink(CwLook.Kind.CALL, confirmed = true))
+        assertEquals(CwLook.TEXT, CwLook.ink(CwLook.Kind.CALL, confirmed = false))
+        assertEquals("KD0CQ", CwLook.wrappedTail("CQ CQ DE KD0CQ", maxLines = 1, columns = 12))
+        assertTrue(CwLook.wrappedTail("CQ CQ DE KD0CQ", maxLines = 2, columns = 12).contains("DE"))
+    }
+
     private fun ft8(text: String, cell: Int) = Ft8Row(
         id = text.hashCode().toLong(),
         cellType = cell,
