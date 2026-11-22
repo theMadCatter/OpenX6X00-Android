@@ -588,3 +588,41 @@ Chris (KD0CQ) approved a real JS8 screen on the same branch, on top of 5789a3e. 
 `js8LinesUseTheFieldsTheRadioWrites`, `appWaterfallHeaderIsTheJs8Frame`, `js8CommandsAreTheWordsTheRadioDispatches`, `js8RowKeepsItsPlaceWhileTheTextGrows`, `ghostNetFilterKeepsTheGroupsAndDropsHighHeartbeats`, `usAdvancedDataSegmentsCoverJs8AndRefuseThePhoneBand` and `theLastHostWinsAndABlankOneFallsBack` cover the parsers, the waterfall header, the group filter and the remembered host. The pending-catalog test no longer requires a JS8 placeholder.
 
 `./gradlew testDebugUnitTest assembleDebug` after this: 238 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+## Digital screens matched to the radio
+
+Credit: Chris Fink (KD0CQ). Built on a436b89. The S24 Ultra showed two layout bugs, and the JS8 screen did not follow the radio's own window.
+
+**What I found**
+
+1. `Js8Screen` was one column: title, status, a 140 dp waterfall, several button rows, the GhostNet editor, then a `LazyColumn` with `weight(1)`, then the compose field. Portrait leftover for the list was almost nothing, because the chrome above it used the height. Landscape on that phone is about 300 dp tall, the column was taller than the screen, and the column did not scroll, so everything under the waterfall was clipped. Putting `weight` inside a vertical scroll does not fix it: the list is then measured with an infinite height.
+
+2. The on-radio JS8 window is `src/js8_window.c`, not `webserver/.../views/js8.html`. Waterfall on top (a short strip, plus a lane of calls), the message list under it, status line above. A row is `hh:mm:ss`, SNR, offset, a speed letter when it is not Normal, then the text. Colours in `message_bg`, night column of `src/theme.h`: our TX `#0A1A33`, alert `#5B21B6`, to us `#991B1B`, CQ `#14532D`, heartbeat in muted text, group `#1E3A5F`. A selected station gets a green bar (`#34D399`). Show is All, no heartbeats, or directed. The finder marks the TX offset.
+
+3. What the panel actually streams, from `remote_server.c` on Guru-RF/OpenX6X00 `main`: FT8 (`ft8r`, `ft8`, `ft8 wf`), JS8 (`js8r`, `js8`, `js8 wf`), CW text (`cw "..."`), WeFax (`wefax` and `0xFFFE` rows after `wefax rows 1`). FT4 and FT2 are not separate sockets. `src/ft8_window.c` is one window and `cfg_ft8_protocol` is 0 FT4, 1 FT8, 2 FT2 (anything else counts as FT2). `ft8 mode` cycles them. PSK, RTTY, Olivia, SSTV, WSPR and Navtex have LVGL screens and no panel or TCI stream.
+
+**What changed**
+
+- Portrait keeps the radio's order and caps the control block, so the message list is the piece that grows and the piece that scrolls. Landscape puts the waterfall on the left and the list plus the controls on the right. Both use the same wide-window test as the rest of the face.
+- JS8 rows use `format_row` and those colours. `@GSTFLASH` uses the alert colour. Show cycles All, No HB, Directed and GhostNet. The GhostNet reminder and the regional group stay, inside the capped control block. A bad checksum is the radio's negative `chk`. It used to be stored as a boolean, and a negative code is non-zero, so a bad checksum was kept as a good one.
+- The waterfall palette tops out at 30 dB over the floor, with tick marks and lines at the TX offset and the selected station. Calls sit on the lane. Opening the screen still sends only `js8 wf 1`. Send, CQ and auto CQ still ask. Take control, operate, transmit permission and the US Advanced check are unchanged.
+- FT8 / FT4 / FT2 is the one screen, titled with the protocol the radio reports. The list is oldest first. A slot time is its own line. A call to us is the red row (`#EF4444`), our TX is blue (`#0082FC`), a CQ has a green edge and a CQ or "worked" tag, and other traffic is grey. SNR, kilometres and the country sit at the end of the row. Mode sends `ft8 mode`. CQ, Auto, TX Call and a reply ask, and they need Take control plus the same band-edge check, using 50 Hz for FT8, 83 Hz for FT4 and 167 Hz for FT2 (`ft8_window.c`). Turning CQ, Auto or TX Call off does not need the band check, so a bad offset cannot leave the transmitter on. The screen asks for `ft8 wf` only while it is open. The radio has one `appwf` flag for FT8 and JS8, so the phone keeps one picture and clears it when a screen starts watching.
+- WeFax parses `wefax` and the `0xFFFE` scan line (its own lane, 32 deep, so a chart is not one stripe and a row cannot sit in front of `ctl`). The picture is the grey bytes. The buttons are open, close, auto, cont, save, clear, plan and unplan. None of those is a transmit command. Each needs operate and Take control. The screen asks for rows and does not send open by itself. The chart takes the leftover height.
+- CW decode is the radio's strip (`src/cw_field.c`): the text the socket sends, filling the screen and scrolling. The spectrum still does not paint it. There is no command and no invented speed.
+- PSK, RTTY, Olivia, SSTV, WSPR and Navtex stay in the pending list.
+
+**What could not be matched**
+
+- The radio's JS8 status line prints its UTC clock and the time-sync drift. The `js8` JSON does not carry either, so the phone's line uses the switches, the speed, the place and the decode count.
+- Directed on the radio also keeps traffic near the selected offset, using the speed's receive threshold. That threshold is not in the JSON. The phone's Directed view is the "to us or to a group" half.
+- Country flags are LVGL images. The socket sends the country name, which is what the row shows.
+- FT8's "NEW" tag needs the radio's DXCC-worked bit. The `ft8r` line does not include it. Worked, CQ, POTA, SNR, distance and country are on the line and are shown.
+- The CW field's WPM is the keyer speed on the radio. The `cw` line is text only.
+- WeFax tilt, align, the night fix and the saved-chart browser are on the radio and are not panel commands.
+- PSK, RTTY, Olivia, SSTV, WSPR and Navtex decode on the radio and are not sent to the phone. No screen was added for them.
+
+`js8AndFt8RowsFollowTheRadioScreens` and `wefaxRowIsNotAJpegOrAWaterfall` cover the row text, the colours, the protocol names and widths, the slot split, the fax header and the band-edge refusal.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **240 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.

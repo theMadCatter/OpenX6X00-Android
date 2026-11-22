@@ -508,8 +508,8 @@ class RadioFaceTest {
             assertTrue("missing placeholder for $needed", names.any { needed in it })
         }
         assertTrue(RadioFace.pendingFeatures().all { it.note == PENDING_FIRMWARE })
-        // JS8 is a real screen now. It must not stay in the grey pending list.
-        assertTrue(names.none { it == "js8" })
+        // These stream over the panel and have their own screens.
+        assertTrue(names.none { it == "js8" || it == "wefax" || it == "cw" })
     }
 
     private fun sample(): RadioState = RadioState(

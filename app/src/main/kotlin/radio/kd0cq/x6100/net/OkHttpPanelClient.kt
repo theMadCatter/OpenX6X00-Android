@@ -61,6 +61,7 @@ class OkHttpPanelClient(
     override val events: Flow<PanelEvent> = bus.events
     override val frames: Flow<PanelEvent> = bus.frames
     override val appFrames: Flow<PanelEvent> = bus.appFrames
+    override val faxFrames: Flow<PanelEvent> = bus.faxFrames
     override val phase: StateFlow<LinkPhase> = linkPhase.asStateFlow()
     override val lastError: StateFlow<String?> = error.asStateFlow()
 
@@ -203,6 +204,12 @@ class OkHttpPanelClient(
             val appWaterfall = PanelProtocol.parseAppWaterfall(raw)
             if (appWaterfall != null) {
                 bus.post(generation, PanelEvent.AppWaterfall(appWaterfall))
+                return
+            }
+            // 0xFFFE before the JPEG check, for the same reason as the waterfall.
+            val fax = PanelProtocol.parseWeFax(raw)
+            if (fax != null) {
+                bus.post(generation, PanelEvent.WeFaxRow(fax))
                 return
             }
             val screen = PanelProtocol.parseScreenFrame(raw)

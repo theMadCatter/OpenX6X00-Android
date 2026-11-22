@@ -436,6 +436,33 @@ class PanelProtocolTest {
         assertNull(PanelProtocol.parseBinary(short))
     }
 
+    /** 8 bytes LE {u16 0xFFFE, u16 width, u32 row}, then one grey byte per pixel. */
+    @Test
+    fun wefaxRowIsNotAJpegOrAWaterfall() {
+        val grey = byteArrayOf(0, 127, 255.toByte())
+        val bytes = ByteBuffer.allocate(8 + grey.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putShort(0xFFFE.toShort())
+            .putShort(grey.size.toShort())
+            .putInt(42)
+            .put(grey)
+            .array()
+        val event = PanelProtocol.parseBinary(bytes) as PanelEvent.WeFaxRow
+        assertEquals(42L, event.row.number)
+        assertArrayEquals(grey, event.row.grey)
+        assertNull(PanelProtocol.parseAppWaterfall(bytes))
+        assertNull(PanelProtocol.parseScreenFrame(bytes))
+        assertNull(PanelProtocol.parseSpectrum(bytes))
+
+        val line = PanelProtocol.parseLine(
+            """wefax {"open":1,"auto":0,"fax":1,"tx":0,"txp":0,"gen":2,"rows":3,"freq":1,"saves":0,"station":"X","saved":"a.png","plan":0,"next":""}""",
+        )
+        val status = (line as PanelEvent.WeFax).status
+        assertTrue(status.fax)
+        assertEquals("a.png", status.saved)
+        assertEquals("wefax rows 1", radio.kd0cq.x6100.digital.WeFaxProtocol.rows(true))
+        assertEquals("wefax open", radio.kd0cq.x6100.digital.WeFaxProtocol.command("open"))
+    }
+
     @Test
     fun reconnectWaitsALittleLongerEveryTimeAndThenStopsGrowing() {
         assertEquals(500L, reconnectDelayMs(0))
