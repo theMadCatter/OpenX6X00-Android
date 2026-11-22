@@ -298,10 +298,11 @@ class RadioLink(
         scope.launch {
             panel.frames.collect { event ->
                 when (event) {
-                    // The radio's spectrum is always 1024 int8 bins (WATERFALL_NFFT), sent when the
-                    // DSP has a new frame and skipped while 16 KB is still queued. There is no
-                    // Panel command for a larger FFT or a higher rate; the painter interpolates
-                    // these bins across the view instead of asking for bins the socket cannot send.
+                    // The header's bin count is what arrived. Today panel_thread always sends
+                    // WATERFALL_NFFT (1024) int8 bins, when the DSP has a new frame, and skips
+                    // one while 16 KB is still queued. There is no command for a larger FFT or
+                    // a higher rate. The painter maps these bins onto the pane; it does not
+                    // invent bins the socket did not send.
                     is PanelEvent.Spectrum -> _spectrum.value = event.frame
                     is PanelEvent.Screen -> _screen.value = event.frame
                     else -> Unit

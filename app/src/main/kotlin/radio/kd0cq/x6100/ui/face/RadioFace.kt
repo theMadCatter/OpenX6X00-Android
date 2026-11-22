@@ -135,9 +135,9 @@ data class SpectrumSlice(val db: ByteArray, val centreHz: Int, val widthHz: Int)
  * Scrolling waterfall rows. Newest is index 0 of [snapshot]: the line under the spectrum is the
  * frame that just arrived, and older frames move down.
  *
- * The depth is the waterfall's pixel height, not a fixed 48. A tall landscape pane then has a
- * row of history for every pixel instead of one row stretched across several. [resize] trims to
- * that height. The cap is [WaterfallDisplay.MAX_ROWS], the firmware's own buffer.
+ * The depth is the waterfall's pixel height, not a fixed 48 and not the radio's 480-line
+ * screen. A taller pane keeps a line for every pixel, so it shows more time. [resize] trims
+ * to that height. The cap is [WaterfallDisplay.MAX_ROWS].
  */
 class SpectrumHistory(capacity: Int = WaterfallDisplay.MAX_ROWS) {
     var capacity: Int = capacity.coerceIn(1, WaterfallDisplay.MAX_ROWS)
