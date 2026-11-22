@@ -538,3 +538,28 @@ Chris (KD0CQ) approved two layout fixes on the same branch.
 `RadioFace.scopeBands` is the arrangement the tests lock. Spectrum-only reports no chip band and no waterfall, and the scale plus the plan land on the bottom of the pane, for both the trace and the ridge. Waterfall-only reports the chip band first, then the scale, and the labels start where the chips end.
 
 `./gradlew testDebugUnitTest assembleDebug` after this: 229 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+## S24 landscape: LSB passband, spectrum share, scope height, meter readout
+
+Live check on Chris's (KD0CQ) S24 Ultra (SM-S928U1), landscape, about 2340×1080, radio in LSB at 3.844.000 on 80 m.
+
+**What was wrong**
+
+1. The passband shade on the waterfall and the spectrum sat above the VFO marker, on the USB side, while the radio was in LSB. `flo` and `fhi` on the state line are `cfg_cur_filter_low` and `cfg_cur_filter_high`: positive audio cuts (300 and 2700), the same numbers in LSB as in USB. `passbandHz` added both to the carrier, so LSB 300..2700 was drawn 300..2700 Hz above the dial.
+
+2. Landscape spectrum-plus-waterfall gave the waterfall about 73% of the pane and then subtracted the scale and the band plan from the trace. On a phone-landscape scope that left the trace under the 24 dp zoom chip, so the spectrum was a ribbon about as tall as that chip.
+
+3. A dark band sat between the bottom of the waterfall and the "Take control" row. The scope is the weighted child between the 64 dp header and that row. The stack was not locked to the measured leftover, the same class of gap the portrait spectrum had above the meter.
+
+4. The arc meter's dBm line was centred on the bottom of the same canvas as the scale. A reading such as −72 covered "+40".
+
+**What changed**
+
+- The side is `spectrum_view.c` `on_filter_change`. USB and DATA-U (DIGU) are `f + low_cut .. f + high_cut`. LSB, DATA-L (DIGL) and RTTY (the radio has no RTTY index; it runs as LSB or DATA-L) are `f - high_cut .. f - low_cut`, wholly below the carrier. CW-R is always that lower side. CW is the lower side only when `cwrise` is set (the X6200); on the X6100 it stays above. AM, NFM, SAM and WFM are `f - high_cut .. f + high_cut`. The state line's `kt` is stored and not added: a 700 Hz tone inside a 300..2700 filter would put the high edge above the VFO. `cwrise` is stored with it.
+- Landscape spectrum-plus-waterfall keeps the trace at 30–35% of the whole scope (the screen asks for 32%). The scale and the plan come out of the waterfall. The 3D field takes a little more and stays under half, so the waterfall is still the larger part. Portrait stays 40% of the room after the strips, 55% for the ridge.
+- Landscape measures the slot between the header and "Take control" and sets the scope to that height, so the waterfall's bottom is that row.
+- The arc meter's caption and dBm line are their own strip above the dial. The marks are drawn in the arc under that strip, from the same geometry the test checks, so no reading shares a y with S1..+40.
+
+`eachModePutsTheFilterOnItsOwnSideOfTheCarrier` locks USB, LSB, CW, CW-R, AM, NFM, SAM, WFM, DIGU and DIGL, and a key tone that must not slide CW-R above the carrier. `landscapeSpectrumTakesAboutAThirdAndReachesTheBottom` locks the 30–35% trace and that the four bands add up to the pane. `meterReadoutSitsAboveEveryScaleMark` locks the readout band above every mark. The state-line test keeps `kt` and `cwrise`.
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 232 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.

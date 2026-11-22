@@ -271,28 +271,35 @@ private fun LandscapeOperating(
 ) {
     // Two stacked full-width rows (status, then the big frequency) plus a 52 dp PTT bar left
     // the waterfall a few dozen pixels tall. One header and one control row give that height
-    // back. The scope is the only weighted child, and three quarters of it is waterfall.
+    // back. The scope is the only weighted child. On the S24 that weight was not the height
+    // the stack painted: the waterfall stopped, and a dark band sat above "Take control".
+    // Measuring the leftover and giving the stack that exact height puts the waterfall on
+    // the control row. The trace keeps about a third of it.
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         LandscapeHeader(
             state, meter, tx, bands, freqGroup, canOperate, audio, viewModel,
             onFreqGroup, onPlaceholder, onPair,
         )
-        SpectrumStack(
-            spectrum = viewModel.spectrum,
-            state = state,
-            plan = plan,
-            spots = spots,
-            canOperate = canOperate,
-            onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
-            onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
-            onZoom = { narrower ->
-                if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
-            },
-            waterfallShare = 0.73f,
-            ridgeHold = viewModel.ridgeHold,
-            waterfallHold = viewModel.waterfallHold,
-            modifier = Modifier.fillMaxWidth().weight(1f),
-        )
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            SpectrumStack(
+                spectrum = viewModel.spectrum,
+                state = state,
+                plan = plan,
+                spots = spots,
+                canOperate = canOperate,
+                onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
+                onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
+                onZoom = { narrower ->
+                    if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
+                },
+                // 0.68 leaves the trace 32% of the pane, inside the 30–35% the radio's
+                // proportions ask for. The scale and the plan come out of the waterfall.
+                waterfallShare = 0.68f,
+                ridgeHold = viewModel.ridgeHold,
+                waterfallHold = viewModel.waterfallHold,
+                modifier = Modifier.height(maxHeight).fillMaxWidth(),
+            )
+        }
         ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
         LandscapeDeck(
             viewModel, page, state, mayKey, canOperate, keyed, micRefused, onMicRefused, note, onKey, onGroup,

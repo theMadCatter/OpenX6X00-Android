@@ -59,6 +59,20 @@ class PanelProtocolTest {
         assertEquals(78, s.battery)
         assertFalse(s.transmitting)
         assertFalse(s.freqLocked)
+        // A line that does not carry the key tone keeps the defaults.
+        assertEquals(0, s.keyToneHz)
+        assertFalse(s.cwToneRises)
+    }
+
+    @Test
+    fun stateLineKeepsTheKeyToneAndWhichSideCwRisesOn() {
+        val line = """state {"freq":3844000,"mode":0,"kt":700,"cwrise":1,"flo":300,"fhi":2700}"""
+        val s = (PanelProtocol.parseLine(line) as PanelEvent.State).state
+        assertEquals(700, s.keyToneHz)
+        assertTrue(s.cwToneRises)
+        assertEquals(300, s.filterLowHz)
+        assertEquals(2700, s.filterHighHz)
+        assertEquals(PanelMode.Lsb, PanelMode.fromIndex(s.mode))
     }
 
     @Test

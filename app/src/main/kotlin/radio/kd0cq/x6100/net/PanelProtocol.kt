@@ -172,7 +172,12 @@ data class RadioState(
     val freqHz: Int,
     /** The index into [PanelMode]; the radio tells a number, never a name. */
     val mode: Int,
-    /** The filter's passband, Hz from the carrier: negative below it. */
+    /**
+     * The filter's low and high cuts, in audio Hz, as `cfg_cur_filter_low` and
+     * `cfg_cur_filter_high`. Both are positive on the air (300 and 2700 for SSB).
+     * They are not yet a side of the carrier: LSB keeps the same two numbers as USB.
+     * [RadioFace.passbandHz] puts them above or below the dial from the mode.
+     */
     val filterLowHz: Int,
     val filterHighHz: Int,
     /** 0 off, 1 slow, 2 fast, 3 auto. */
@@ -197,6 +202,18 @@ data class RadioState(
     val battery: Int,
     val transmitting: Boolean,
     val freqLocked: Boolean,
+    /**
+     * `kt`, the CW key tone in Hz. The filter edges are tones, and the band the
+     * waterfall draws sits around the dial by this tone. 0 when the state line
+     * does not carry it.
+     */
+    val keyToneHz: Int = 0,
+    /**
+     * `cwrise`. True on a radio whose CW tone rises as the dial goes up (the X6200),
+     * so CW's passband is on the same side as CW-R. False on the X6100, where CW
+     * is the upper side and CW-R is the lower side.
+     */
+    val cwToneRises: Boolean = false,
 ) {
     val modeLabel: String get() = PanelMode.fromIndex(mode)?.label ?: "mode $mode"
     val attenuatorOn: Boolean get() = att > 0
@@ -512,6 +529,8 @@ object PanelProtocol {
                 battery = i("bat"),
                 transmitting = flag("tx"),
                 freqLocked = flag("lock"),
+                keyToneHz = i("kt"),
+                cwToneRises = flag("cwrise"),
             )
         )
     }
