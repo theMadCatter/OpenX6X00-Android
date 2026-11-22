@@ -60,6 +60,7 @@ class OkHttpPanelClient(
 
     override val events: Flow<PanelEvent> = bus.events
     override val frames: Flow<PanelEvent> = bus.frames
+    override val appFrames: Flow<PanelEvent> = bus.appFrames
     override val phase: StateFlow<LinkPhase> = linkPhase.asStateFlow()
     override val lastError: StateFlow<String?> = error.asStateFlow()
 
@@ -196,6 +197,12 @@ class OkHttpPanelClient(
             val spectrum = PanelProtocol.parseSpectrum(raw)
             if (spectrum != null) {
                 bus.post(generation, PanelEvent.Spectrum(spectrum))
+                return
+            }
+            // 0xFFFD before the JPEG check. The app waterfall's first bins can look like FFD8.
+            val appWaterfall = PanelProtocol.parseAppWaterfall(raw)
+            if (appWaterfall != null) {
+                bus.post(generation, PanelEvent.AppWaterfall(appWaterfall))
                 return
             }
             val screen = PanelProtocol.parseScreenFrame(raw)

@@ -217,7 +217,9 @@ private fun androidx.navigation.NavGraphBuilder.screens(nav: NavHostController, 
     composable(Route.FT8.path) {
         Ft8Screen(viewModel, onJs8 = { nav.navigate("js8") { launchSingleTop = true } })
     }
-    composable("js8") { Js8Screen() }
+    composable("js8") {
+        Js8Screen(viewModel, onBack = { nav.popBackStack() })
+    }
     composable(Route.SPOTS.path) { SpotsScreen(viewModel) }
     composable(Route.LOG.path) { LogScreen(viewModel) }
     composable(Route.SETTINGS.path) { SettingsScreen(viewModel, onBack = { nav.popBackStack() }) }

@@ -254,9 +254,12 @@ object RadioFace {
         Band("70cm", 420_000_000, 450_000_000),
     )
 
-    /** Digital modes the firmware opens from the Modes app and the Panel line does not. */
+    /**
+     * Digital modes the firmware opens from the Modes app and the Panel line does not.
+     * JS8 left this list when v0.3.13 added the js8 commands. It has its own screen.
+     */
     val pendingDigitalModes: List<String> = listOf(
-        "JS8", "PSK", "RTTY", "Olivia", "SSTV", "WSPR", "Navtex", "WeFax",
+        "PSK", "RTTY", "Olivia", "SSTV", "WSPR", "Navtex", "WeFax",
     )
 
     val pages: List<FacePage> = buildPages()

@@ -157,6 +157,13 @@ object PanelCommands {
     /** The FT8 app: open, close, cq, stop, auto, hold, mode, txfreq, reply, txcall. */
     fun ft8(what: String, arg: String? = null): String = if (arg != null) "ft8 $what $arg" else "ft8 $what"
 
+    /**
+     * The JS8 app, as v0.3.13 answers it. "js8 send TEXT" is built by
+     * [radio.kd0cq.x6100.digital.Js8Protocol.send] so the spaces survive.
+     * There is no "js8 tx".
+     */
+    fun js8(what: String): String = radio.kd0cq.x6100.digital.Js8Protocol.command(what)
+
     /** "log CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY" — the radio's CW keyboard's own text. */
     fun log(text: String) = "log $text"
 
@@ -382,6 +389,28 @@ data class SpectrumFrame(
     override fun hashCode(): Int = ((((bins * 31 + centreHz) * 31 + widthHz) * 31 + sequence.hashCode()) * 31) + db.contentHashCode()
 }
 
+/**
+ * One line of the JS8 or FT8 app waterfall.
+ *
+ * "8 bytes LE {u16 0xFFFD, u16 bins, u16 lo Hz, u16 hi Hz}" then one int8 per
+ * bin, dB over the noise floor. The same header serves both apps. The client
+ * flag is one bit (`appwf`), set by "js8 wf 1" or "ft8 wf 1". This screen asks
+ * only for the JS8 one, and it stops it on the way out.
+ */
+data class AppWaterfallFrame(
+    val bins: Int,
+    val lowHz: Int,
+    val highHz: Int,
+    val db: ByteArray,
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            (other is AppWaterfallFrame && bins == other.bins && lowHz == other.lowHz &&
+                highHz == other.highHz && db.contentEquals(other.db))
+
+    override fun hashCode(): Int = (((bins * 31 + lowHz) * 31 + highHz) * 31) + db.contentHashCode()
+}
+
 /** A screen frame: "8 bytes LE {u16 w, u16 h, u32 seq}" then a JPEG. */
 data class ScreenFrame(val width: Int, val height: Int, val sequence: Long, val jpeg: ByteArray) {
     override fun equals(other: Any?): Boolean =
@@ -416,6 +445,15 @@ sealed class PanelEvent {
     data class DecodedFt8Row(val row: Ft8Row) : PanelEvent()
     data class Ft8(val status: Ft8Status) : PanelEvent()
 
+    /** "js8r {...}". The same id is delivered again while the message is still arriving. */
+    data class DecodedJs8(val row: radio.kd0cq.x6100.digital.Js8Row) : PanelEvent()
+
+    /** "js8 {...}", the app's switches and the note from the last command. */
+    data class Js8(val status: radio.kd0cq.x6100.digital.Js8Status) : PanelEvent()
+
+    /** The 0xFFFD app waterfall. It rides its own lane so it cannot replace a spectrum frame. */
+    data class AppWaterfall(val frame: AppWaterfallFrame) : PanelEvent()
+
     /** The CW decoder's text, one line per decode. */
     data class Cw(val text: String) : PanelEvent()
     data class Logged(val receipt: LoggedReceipt) : PanelEvent()
@@ -441,6 +479,8 @@ object PanelProtocol {
 
     private const val SPECTRUM_MAGIC = 0xFFFF
     private const val SPECTRUM_HEADER = 16
+    private const val APP_WATERFALL_MAGIC = 0xFFFD
+    private const val APP_WATERFALL_HEADER = 8
     private const val SCREEN_HEADER = 8
 
     /** One text message, or null when the radio said something we do not know yet. */
@@ -466,6 +506,8 @@ object PanelProtocol {
             "spots" -> parseSpots(rest)
             "ft8r" -> parseFt8Row(rest)
             "ft8" -> parseFt8Status(rest)
+            "js8r" -> radio.kd0cq.x6100.digital.Js8Protocol.parseRow(rest)?.let { PanelEvent.DecodedJs8(it) }
+            "js8" -> radio.kd0cq.x6100.digital.Js8Protocol.parseStatus(rest)?.let { PanelEvent.Js8(it) }
             "cw" -> parseCw(rest)
             "logged" -> parseLogged(rest)
             "role" -> parseRole(rest)
@@ -705,9 +747,33 @@ object PanelProtocol {
         return PanelEvent.Sessions(sessions)
     }
 
-    /** A binary frame: the spectrum, or a screen. Null for a frame we cannot make sense of. */
+    /**
+     * A binary frame: the receiver spectrum (0xFFFF), the JS8/FT8 app waterfall
+     * (0xFFFD), or a screen JPEG. The app waterfall is tried before the screen.
+     * Its first bins can be 0xFF 0xD8, which is also how a JPEG starts, and the
+     * magic would otherwise be read as a screen width.
+     */
     fun parseBinary(bytes: ByteArray): PanelEvent? =
-        parseSpectrum(bytes)?.let { PanelEvent.Spectrum(it) } ?: parseScreenFrame(bytes)?.let { PanelEvent.Screen(it) }
+        parseSpectrum(bytes)?.let { PanelEvent.Spectrum(it) }
+            ?: parseAppWaterfall(bytes)?.let { PanelEvent.AppWaterfall(it) }
+            ?: parseScreenFrame(bytes)?.let { PanelEvent.Screen(it) }
+
+    /**
+     * The JS8 or FT8 app waterfall: 8 bytes LE {u16 0xFFFD, u16 bins, u16 lo Hz,
+     * u16 hi Hz}, then one int8 per bin. A short payload is not a frame.
+     */
+    fun parseAppWaterfall(bytes: ByteArray): AppWaterfallFrame? {
+        if (bytes.size < APP_WATERFALL_HEADER) return null
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if ((buf.short.toInt() and 0xFFFF) != APP_WATERFALL_MAGIC) return null
+        val bins = buf.short.toInt() and 0xFFFF
+        val lowHz = buf.short.toInt() and 0xFFFF
+        val highHz = buf.short.toInt() and 0xFFFF
+        if (bins <= 0 || bytes.size - APP_WATERFALL_HEADER < bins) return null
+        val db = ByteArray(bins)
+        buf.get(db)
+        return AppWaterfallFrame(bins, lowHz, highHz, db)
+    }
 
     /** The waterfall's FFT: a 16-byte header with 0xFFFF, bins, centre, width, sequence, then int8 dB. */
     fun parseSpectrum(bytes: ByteArray): SpectrumFrame? {

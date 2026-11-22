@@ -21,6 +21,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import radio.kd0cq.x6100.discovery.FoundRadio
 import radio.kd0cq.x6100.discovery.RadioDiscovery
+import radio.kd0cq.x6100.digital.GhostNet
+import radio.kd0cq.x6100.digital.Js8Protocol
+import radio.kd0cq.x6100.digital.Js8Row
+import radio.kd0cq.x6100.digital.Js8Status
+import radio.kd0cq.x6100.digital.UsAdvanced
+import radio.kd0cq.x6100.net.AppWaterfallFrame
 import radio.kd0cq.x6100.net.Band
 import radio.kd0cq.x6100.net.ControlInfo
 import radio.kd0cq.x6100.net.Ft8Row
@@ -51,6 +57,8 @@ import radio.kd0cq.x6100.log.StationPlace
 import radio.kd0cq.x6100.log.toEntity
 import radio.kd0cq.x6100.log.toQso
 import radio.kd0cq.x6100.service.RadioConnectionService
+import radio.kd0cq.x6100.service.RememberedHost
+import radio.kd0cq.x6100.service.RememberedHostStore
 import radio.kd0cq.x6100.ui.face.RidgeHold
 import radio.kd0cq.x6100.ui.face.WaterfallHold
 import radio.kd0cq.x6100.service.RadioRigs
@@ -67,6 +75,7 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     private val link = RadioLinks.link(application)
     private val rig = RadioRigs.rig(application)
     private val discovery = RadioDiscovery(application)
+    private val remembered = RememberedHostStore(application)
 
     val foundRadios: StateFlow<List<FoundRadio>> = discovery.radios
 
@@ -94,6 +103,10 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     val spots: StateFlow<List<Spot>> = link.spots
     val ft8Rows: StateFlow<List<Ft8Row>> = link.ft8Rows
     val ft8Status: StateFlow<Ft8Status?> = link.ft8Status
+    val js8Rows: StateFlow<List<Js8Row>> = link.js8Rows
+    val js8Status: StateFlow<Js8Status?> = link.js8Status
+    val js8Waterfall: StateFlow<List<AppWaterfallFrame>> = link.js8Waterfall
+    val js8NeedsFirmware: StateFlow<Boolean> = link.js8NeedsFirmware
     val cwLines: StateFlow<List<String>> = link.cwLines
     val receipts: StateFlow<List<LoggedReceipt>> = link.receipts
     val sessions: StateFlow<List<SessionInfo>> = link.sessions
@@ -215,15 +228,35 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopSearching() = discovery.stop()
 
+    /**
+     * The host the connect field starts from. A process that died, or an install
+     * over the existing app, keeps whatever was last entered. Nothing saved yet
+     * is still [RadioEndpoint.DEFAULT_HOST].
+     */
+    fun rememberedHost(): String = RememberedHost.shown(remembered.readHost())
+
+    /** Write the host the operator entered. Disconnect does not call this to clear it. */
+    fun rememberHost(host: String) = remembered.writeHost(host)
+
+    /** The GhostNet regional group, or @GNUSAMO until the operator edits it. */
+    fun ghostnetGroup(): String {
+        val saved = remembered.readGroup()
+        return if (saved.isNullOrBlank()) GhostNet.DEFAULT_REGION else GhostNet.groupToken(saved)
+    }
+
+    fun rememberGhostnetGroup(group: String) = remembered.writeGroup(GhostNet.groupToken(group))
+
     /** The service owns the sockets, so a screen leaving does not drop the link. */
     fun connectTo(radio: FoundRadio) {
         val endpoint = radio.endpoint()
+        rememberHost(endpoint.host)
         _endpoint.value = endpoint
         RadioConnectionService.connect(getApplication(), endpoint)
     }
 
     /** Reach a radio the resolver does not know, by address. */
     fun connectToHost(host: String, panelPort: Int = PANEL_PORT, tciPort: Int = TCI_PORT) {
+        rememberHost(host)
         val endpoint = RadioEndpoint(name = host, host = host, panelPort = panelPort, tciPort = tciPort)
         _endpoint.value = endpoint
         RadioConnectionService.connect(getApplication(), endpoint)
@@ -318,6 +351,79 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     /** The FT8 app's switches, one command each. */
     fun ft8(what: String, arg: String? = null) = send(PanelCommands.ft8(what, arg))
 
+    /**
+     * Ask the radio for the JS8 waterfall, or stop asking.
+     *
+     * This is the only JS8 line the screen sends by itself, and only because the
+     * screen was opened or left. It does not open the JS8 app and it does not
+     * transmit. The radio does not require a role for "js8 wf".
+     */
+    fun js8Watch(on: Boolean) = send(Js8Protocol.waterfall(on))
+
+    /**
+     * A JS8 command that does not transmit: open, close, hold, speed, stop,
+     * select, txfreq. Returns false, and sends nothing, until this session may
+     * operate and holds control. A transmit word is refused here even then, so
+     * a tap that should have gone through [js8Transmit] cannot slip out.
+     */
+    fun js8Operate(line: String): Boolean {
+        if (!js8LineIsOperate(line)) return false
+        if (!holdingControls()) return false
+        send(line)
+        return true
+    }
+
+    /**
+     * Why a transmit would not be sent, or null when it would.
+     * The confirm dialog asks this before it is shown, and [js8Transmit] asks again.
+     */
+    fun js8TransmitBlocked(): String? = js8TransmitReason()
+
+    /**
+     * Send, CQ, auto CQ, heartbeat, heartbeat-now, or auto.
+     * Returns the reason nothing was sent, or null when the line went out.
+     * The caller has already required a tap, and for Send and CQ a second tap.
+     * This does not turn auto or heartbeat on by itself.
+     */
+    fun js8Transmit(line: String): String? {
+        if (!js8LineIsTransmit(line)) return "That is not a JS8 transmit."
+        val reason = js8TransmitReason()
+        if (reason != null) return reason
+        send(line)
+        return null
+    }
+
+    private fun holdingControls(): Boolean = control.value.mine && role.value.canOperate
+
+    private fun js8TransmitReason(): String? {
+        if (!holdingControls()) return "Take control before transmitting."
+        if (!role.value.txAllowed) return "This session is not allowed to transmit."
+        val dial = state.value?.freqHz ?: return "The radio has not reported a dial frequency yet."
+        // A missing state line is not an offset of 0. Guessing 0 could put the tones
+        // outside the segment the operator can see.
+        val js8 = js8Status.value ?: return "The radio has not reported the JS8 transmit offset yet."
+        val offset = js8.txFreqHz
+        val width = Js8Protocol.toneWidthHz(js8.speed)
+        val low = dial.toLong() + offset
+        val high = low + width
+        if (!UsAdvanced.dataCovers(low, high)) {
+            return "That signal ($low–$high Hz) is outside the US Advanced data segments."
+        }
+        return null
+    }
+
+    private fun js8Word(line: String): String = line.trim().removePrefix("js8 ").substringBefore(' ')
+
+    private fun js8LineIsTransmit(line: String): Boolean {
+        val word = js8Word(line)
+        return word == "send" || word in JS8_TRANSMIT
+    }
+
+    private fun js8LineIsOperate(line: String): Boolean {
+        val word = js8Word(line)
+        return word in JS8_OPERATE && word !in JS8_TRANSMIT
+    }
+
     fun qrzUsername(): String = qrzSecrets.username()
 
     /** Stored in the keystore. The password is not logged. */
@@ -355,5 +461,13 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         discovery.stop()
         super.onCleared()
+    }
+
+    private companion object {
+        /** Words that put the JS8 transmitter on the air. auto answers, so it is one of them. */
+        val JS8_TRANSMIT = setOf("send", "cq", "autocq", "hbnow", "hb", "auto")
+
+        /** Words that change the app and do not transmit. Waterfall is [js8Watch], not this set. */
+        val JS8_OPERATE = setOf("open", "close", "hold", "speed", "stop", "select", "txfreq")
     }
 }

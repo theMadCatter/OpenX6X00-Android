@@ -563,3 +563,28 @@ Live check on Chris's (KD0CQ) S24 Ultra (SM-S928U1), landscape, about 2340×1080
 `eachModePutsTheFilterOnItsOwnSideOfTheCarrier` locks USB, LSB, CW, CW-R, AM, NFM, SAM, WFM, DIGU and DIGL, and a key tone that must not slide CW-R above the carrier. `landscapeSpectrumTakesAboutAThirdAndReachesTheBottom` locks the 30–35% trace and that the four bands add up to the pane. `meterReadoutSitsAboveEveryScaleMark` locks the readout band above every mark. The state-line test keeps `kt` and `cwrise`.
 
 `./gradlew testDebugUnitTest assembleDebug` after this: 232 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+## JS8, GhostNet, and the connect field
+
+Chris (KD0CQ) approved a real JS8 screen on the same branch, on top of 5789a3e. The words are the ones OpenX6X00 v0.3.13 added in b2c837d.
+
+**What was wrong**
+
+1. `JS8_IN_FIRMWARE` was false, the parser read `text` / `freq` / `call` / `directed`, and Transmit built `js8 tx`. The radio's command is `js8 send TEXT` (spaces kept, 500 characters, the radio fills the macros). A message is `js8r` with `x`, `f`, `fr`, `to`, `me` and `grp`. The same `id` is rewritten while the message is still arriving. State is a `js8` JSON line. The app waterfall is an 8-byte header, magic `0xFFFD`, then one int8 per bin. None of that was parsed, and the screen never held the view model, so a tap could not reach the radio.
+
+2. JS8 was still in the grey pending-modes list, next to PSK and RTTY.
+
+3. The connect page's help, the phase line, the empty-state line and the found-radio rows took a text colour that sat as dark grey on the black page. The host box was created at `x6100.local` on every composition, so a restart threw away the address that had been typed.
+
+**What changed**
+
+- `js8r` and `js8` parse into rows and status. A repeated id replaces the row in place. The last 64 are kept. `0xFFFD` is parsed before the JPEG check, because the first bins can be `FF D8`. Those lines have their own one-deep lane. Sharing the spectrum's lane would have let a spectrum frame replace every JS8 line, and the other way around.
+- The screen sends `js8 wf 1` when it opens and `js8 wf 0` when it leaves. It does not send `js8 open`. Open is a button, and it needs the operate role and Take control, as every command except the waterfall does. Send, CQ and auto CQ ask in a dialog. HB, HB now and Auto are a tap and nothing else, and none of them is sent on open or on connect. Auto and HB stay at whatever the radio last reported.
+- Transmit is refused until this session holds control, may operate, may transmit, the radio has reported a JS8 offset, and the dial plus that offset plus the tone width sits inside one US Advanced data segment (47 CFR 97.301(c) intersected with the 97.305 data stretches). There was no privilege check elsewhere in the app. This is that check, used on the JS8 transmit path. 7.107 MHz is inside the 40 m data segment. 3.844 MHz is phone and is refused.
+- An answer of `unknown command js8` raises a note that the radio needs OpenX6X00 v0.3.13 or newer. `err js8 send: ...` means the command exists and this one send was refused, so it does not raise that note.
+- GhostNet is a filter: `@GHOSTNET`, `@GSTFLASH`, and a regional group that starts at `@GNUSAMO` and can be edited. `@GSTFLASH` is drawn in red. The North America reminder is Thursday 0100Z on a 7.107 MHz dial, Wednesday 7 PM Central, with heartbeats kept below a 1000 Hz offset. A heartbeat at or above that offset is left out of the GhostNet list, and HB / HB now stay disabled on that tab. There is no remote command for GhostNet mode. The screen says it is turned on in the radio's JS8 settings or its web config.
+- The connect page uses the face's own text colours. The last host is written when it is typed and when a radio is chosen, with `commit`, and Stop does not clear it. Nothing saved yet is still `x6100.local`. Backup is on so a reinstall that restores app data can bring that host back. The pairing token, the QRZ password and the local log are excluded from that backup.
+
+`js8LinesUseTheFieldsTheRadioWrites`, `appWaterfallHeaderIsTheJs8Frame`, `js8CommandsAreTheWordsTheRadioDispatches`, `js8RowKeepsItsPlaceWhileTheTextGrows`, `ghostNetFilterKeepsTheGroupsAndDropsHighHeartbeats`, `usAdvancedDataSegmentsCoverJs8AndRefuseThePhoneBand` and `theLastHostWinsAndABlankOneFallsBack` cover the parsers, the waterfall header, the group filter and the remembered host. The pending-catalog test no longer requires a JS8 placeholder.
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 238 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
