@@ -92,10 +92,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
-import kotlin.math.sin
 import kotlinx.coroutines.flow.StateFlow
 import radio.kd0cq.x6100.net.PanelMode
 import radio.kd0cq.x6100.net.PlanSegment
@@ -323,61 +321,65 @@ fun NeedleMeter(
             }
         } else {
             // The radio's dial is an amber arc with S1, the odd S units, 9, +20 and +40.
-            // Three ticks and no words left the needle with nothing to be read against.
+            // The dBm line used to sit on the bottom of this same box, and a reading
+            // such as −72 covered "+40". The line is its own strip. The arc, and every
+            // mark, is drawn underneath it, so the widest value still ends where the
+            // scale begins. meterFace is that split.
             val measurer = rememberTextMeasurer()
             val labelStyle = TextStyle(color = RfGuru.goldText, fontSize = 8.sp, fontFamily = Mono)
-            Canvas(Modifier.fillMaxSize()) {
-                val pivot = Offset(size.width / 2f, size.height * 0.82f)
-                val radius = minOf(size.width * 0.46f, size.height * 0.72f)
-                drawArc(
-                    color = RfGuru.gold,
-                    startAngle = 180f,
-                    sweepAngle = 180f,
-                    useCenter = false,
-                    topLeft = Offset(pivot.x - radius, pivot.y - radius),
-                    size = Size(radius * 2, radius * 2),
-                    style = Stroke(width = 2.2f),
+            Column(Modifier.fillMaxSize()) {
+                Text(
+                    "${reading.caption}  ${RadioFace.formatDb(db)}",
+                    color = RfGuru.goldText,
+                    fontFamily = Mono,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
                 )
-                RadioFace.sMeterMarks().forEach { (mark, label) ->
-                    val rad = Math.toRadians(180.0 + mark * 180.0)
-                    val cosR = cos(rad).toFloat()
-                    val sinR = sin(rad).toFloat()
-                    val major = label == "S1" || label == "9" || label == "+40"
-                    val inner = radius * if (major) 0.78f else 0.86f
-                    val outer = radius * 0.98f
-                    drawLine(
-                        RfGuru.gold,
-                        Offset(pivot.x + cosR * inner, pivot.y + sinR * inner),
-                        Offset(pivot.x + cosR * outer, pivot.y + sinR * outer),
-                        strokeWidth = if (major) 2.2f else 1.3f,
+                Canvas(Modifier.fillMaxWidth().weight(1f)) {
+                    val pivot = RadioFace.dialPivot(size.width, size.height)
+                    val radius = RadioFace.dialRadius(size.width, size.height)
+                    drawArc(
+                        color = RfGuru.gold,
+                        startAngle = 180f,
+                        sweepAngle = 180f,
+                        useCenter = false,
+                        topLeft = Offset(pivot.x - radius, pivot.y - radius),
+                        size = Size(radius * 2, radius * 2),
+                        style = Stroke(width = 2.2f),
                     )
-                    val measured = measurer.measure(label, labelStyle)
-                    val labelR = radius * 0.58f
-                    val left = (pivot.x + cosR * labelR - measured.size.width / 2f)
-                        .coerceIn(0f, (size.width - measured.size.width).coerceAtLeast(0f))
-                    val top = (pivot.y + sinR * labelR - measured.size.height / 2f)
-                        .coerceIn(0f, (size.height - measured.size.height).coerceAtLeast(0f))
-                    drawText(measured, topLeft = Offset(left, top))
+                    RadioFace.sMeterMarks().forEach { (mark, label) ->
+                        val major = label == "S1" || label == "9" || label == "+40"
+                        val inner = RadioFace.dialPoint(size.width, size.height, mark, if (major) 0.78f else 0.86f)
+                        val outer = RadioFace.dialPoint(size.width, size.height, mark, 0.98f)
+                        drawLine(
+                            RfGuru.gold,
+                            Offset(inner.x, inner.y),
+                            Offset(outer.x, outer.y),
+                            strokeWidth = if (major) 2.2f else 1.3f,
+                        )
+                        val measured = measurer.measure(label, labelStyle)
+                        val at = RadioFace.dialLabelTopLeft(
+                            size.width,
+                            size.height,
+                            mark,
+                            measured.size.width.toFloat(),
+                            measured.size.height.toFloat(),
+                        )
+                        drawText(measured, topLeft = Offset(at.x, at.y))
+                    }
+                    val tip = RadioFace.dialPoint(size.width, size.height, reading.needle, 0.9f)
+                    drawLine(
+                        packedArgb(RadioFace.VFO_LINE_ARGB),
+                        Offset(pivot.x, pivot.y),
+                        Offset(tip.x, tip.y),
+                        strokeWidth = 2.4f,
+                        cap = StrokeCap.Round,
+                    )
                 }
-                val rad = Math.toRadians(180.0 + reading.needle * 180.0)
-                drawLine(
-                    packedArgb(RadioFace.VFO_LINE_ARGB),
-                    pivot,
-                    Offset(
-                        pivot.x + (cos(rad) * radius * 0.9).toFloat(),
-                        pivot.y + (sin(rad) * radius * 0.9).toFloat(),
-                    ),
-                    strokeWidth = 2.4f,
-                    cap = StrokeCap.Round,
-                )
             }
-            Text(
-                "${reading.caption}  ${RadioFace.formatDb(db)}",
-                color = RfGuru.goldText,
-                fontFamily = Mono,
-                fontSize = 11.sp,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
         }
     }
 }
@@ -861,9 +863,10 @@ fun SpectrumStack(
         ) {
             val scaleH = ScaleBand.toPx()
             val planH = PlanBand.toPx()
-            // Zoom sits in the top-right. The split keeps the trace at least as tall as
-            // that chip. On landscape S+W the trace is only that tall, so the right-hand
-            // frequency label is reserved out of the chip below, in scaleLabelWidth.
+            // Zoom sits in the top-right of the trace. The split keeps the trace at least
+            // as tall as that chip. Landscape spectrum-plus-waterfall gives the trace
+            // about a third of the pane, so the chip no longer reaches the frequency
+            // labels. A short trace still reserves that corner, in scaleLabelWidth.
             val zoomGuard = 24.dp.toPx()
             val split = RadioFace.scopeSplit(
                 size.height, scaleH, planH, waterfallShare, zoomGuard, ridge, scopeLayout,
@@ -1003,7 +1006,16 @@ fun SpectrumStack(
                     }
                 }
                 state?.let { radio ->
-                    val (lo, hi) = RadioFace.passbandHz(radio.freqHz, radio.filterLowHz, radio.filterHighHz)
+                    // flo and fhi are audio cuts. The mode, the key tone and cwrise decide
+                    // which side of the VFO they occupy. LSB is below the marker.
+                    val (lo, hi) = RadioFace.passbandHz(
+                        radio.freqHz,
+                        radio.filterLowHz,
+                        radio.filterHighHz,
+                        radio.mode,
+                        radio.keyToneHz,
+                        radio.cwToneRises,
+                    )
                     val x0 = RadioFace.fractionForHz(lo, hzSpan) * size.width
                     val x1 = RadioFace.fractionForHz(hi, hzSpan) * size.width
                     val bandLeft = minOf(x0, x1).coerceIn(0f, size.width)

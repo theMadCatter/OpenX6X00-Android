@@ -15,6 +15,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import radio.kd0cq.x6100.net.Band
+import radio.kd0cq.x6100.net.PanelMode
 import radio.kd0cq.x6100.net.PanelSettings
 import radio.kd0cq.x6100.net.PlanSegment
 import radio.kd0cq.x6100.net.RadioState
@@ -160,19 +161,28 @@ class RadioFaceTest {
     }
 
     @Test
-    fun landscapeScopeGivesTheWaterfallAboutThreeQuarters() {
-        // 240 px stands in for a phone-landscape scope after the header and the key row.
-        // The waterfall has to be about three quarters of that pane, and the trace still
-        // tall enough that the Zoom chip sits above the frequency ticks.
-        val split = RadioFace.scopeSplit(heightPx = 240f, scalePx = 16f, planPx = 14f, waterfallShare = 0.73f, zoomGuardPx = 24f)
-        val share = split.waterfallPx / 240f
-        assertTrue(share in 0.68f..0.76f)
-        assertTrue(split.spectrumPx >= 24f)
+    fun landscapeSpectrumTakesAboutAThirdAndReachesTheBottom() {
+        // An S24-class landscape scope. The trace is 30–35% of that pane. The scale
+        // and the plan are inside the rest, so the four bands add up to the pane:
+        // nothing is left under the waterfall.
+        val height = 480f
+        val scale = 16f
+        val plan = 8f
+        val split = RadioFace.scopeSplit(height, scale, plan, waterfallShare = 0.68f, zoomGuardPx = 24f)
+        val trace = split.spectrumPx / height
+        assertTrue(trace in 0.30f..0.35f)
+        assertEquals(height, split.spectrumPx + scale + plan + split.waterfallPx, 0.01f)
+        assertTrue(split.waterfallPx > split.spectrumPx)
+        assertTrue(split.spectrumPx > 24f)
+        // The old 0.73 share subtracted the strips from the trace and left it on the
+        // zoom chip. The trace is still inside 30–35% for that call.
+        val older = RadioFace.scopeSplit(height, scale, plan, waterfallShare = 0.73f, zoomGuardPx = 24f)
+        assertTrue(older.spectrumPx / height in 0.30f..0.35f)
         val portrait = RadioFace.scopeSplit(300f, 16f, 14f, waterfallShare = 0f, zoomGuardPx = 24f)
         assertEquals(108f, portrait.spectrumPx, 0.5f)
         // The 3D ridges take a little of the waterfall's height. The waterfall stays the
         // larger part of the landscape pane, and portrait grows past the 40% trace.
-        val ridge = RadioFace.scopeSplit(240f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f, ridge = true)
+        val ridge = RadioFace.scopeSplit(height, scale, plan, waterfallShare = 0.68f, zoomGuardPx = 24f, ridge = true)
         assertTrue(ridge.spectrumPx > split.spectrumPx)
         assertTrue(ridge.waterfallPx > ridge.spectrumPx)
         val portraitRidge = RadioFace.scopeSplit(300f, 16f, 14f, waterfallShare = 0f, zoomGuardPx = 24f, ridge = true)
@@ -183,15 +193,15 @@ class RadioFaceTest {
     fun scopeLayoutGivesTheWholeRoomToOnePane() {
         // 400 px stands in for the scope after the header. The scale and the plan stay
         // outside the room, so spectrum-only is that room and the waterfall is gone.
-        val both = RadioFace.scopeSplit(400f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f)
+        val both = RadioFace.scopeSplit(400f, 16f, 14f, waterfallShare = 0.68f, zoomGuardPx = 24f)
         val spectrum = RadioFace.scopeSplit(
-            400f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f, layout = ScopeLayout.SPECTRUM,
+            400f, 16f, 14f, waterfallShare = 0.68f, zoomGuardPx = 24f, layout = ScopeLayout.SPECTRUM,
         )
         assertEquals(0f, spectrum.waterfallPx, 0.01f)
         assertEquals(370f, spectrum.spectrumPx, 0.01f)
         assertTrue(spectrum.spectrumPx > both.spectrumPx * 2f)
         val waterfall = RadioFace.scopeSplit(
-            400f, 16f, 14f, waterfallShare = 0.73f, zoomGuardPx = 24f, layout = ScopeLayout.WATERFALL,
+            400f, 16f, 14f, waterfallShare = 0.68f, zoomGuardPx = 24f, layout = ScopeLayout.WATERFALL,
         )
         assertEquals(0f, waterfall.spectrumPx, 0.01f)
         assertEquals(370f, waterfall.waterfallPx, 0.01f)
@@ -210,13 +220,13 @@ class RadioFaceTest {
         // Landscape scope after the header and the keys. Spectrum-only keeps that
         // room. The waterfall share must not leave a black band under a short trace.
         val wide = RadioFace.scopeSplit(
-            240f, 16f, 8f, waterfallShare = 0.73f, zoomGuardPx = 24f,
+            240f, 16f, 8f, waterfallShare = 0.68f, zoomGuardPx = 24f,
             ridge = false, layout = ScopeLayout.SPECTRUM,
         )
         assertEquals(0f, wide.waterfallPx, 0.01f)
         assertEquals(216f, wide.spectrumPx, 0.01f)
-        val wideBoth = RadioFace.scopeSplit(240f, 16f, 8f, waterfallShare = 0.73f, zoomGuardPx = 24f)
-        assertTrue(wide.spectrumPx > wideBoth.spectrumPx * 3f)
+        val wideBoth = RadioFace.scopeSplit(240f, 16f, 8f, waterfallShare = 0.68f, zoomGuardPx = 24f)
+        assertTrue(wide.spectrumPx > wideBoth.spectrumPx * 2f)
 
         // Portrait scope is the column left after the keys, the meter and the sliders.
         // Spectrum-only uses that column, not the 40% combined split, and not past it.
@@ -344,6 +354,65 @@ class RadioFaceTest {
         assertNull(lefts[1])
         assertNotNull(lefts[2])
         assertTrue(lefts[2]!! + 40f <= 220f)
+    }
+
+    @Test
+    fun eachModePutsTheFilterOnItsOwnSideOfTheCarrier() {
+        // 3.844.000 on 80 m, the cuts the radio sends as positive audio Hz.
+        val f = 3_844_000
+        val low = 300
+        val high = 2700
+        // USB and DATA-U sit above the VFO.
+        assertEquals(f + low to f + high, RadioFace.passbandHz(f, low, high, PanelMode.Usb.index))
+        assertEquals(f + low to f + high, RadioFace.passbandHz(f, low, high, PanelMode.DigU.index))
+        // LSB, DATA-L and RTTY sit below it: f - high_cut .. f - low_cut.
+        // RTTY is not a mode index. It runs as LSB or DATA-L.
+        assertEquals(f - high to f - low, RadioFace.passbandHz(f, low, high, PanelMode.Lsb.index))
+        assertEquals(f - high to f - low, RadioFace.passbandHz(f, low, high, PanelMode.DigL.index))
+        // CW-R is the lower side even when a key tone is present. Adding the tone
+        // would put the high edge above the VFO.
+        assertEquals(f - high to f - low, RadioFace.passbandHz(f, low, high, PanelMode.Cwr.index))
+        assertEquals(
+            f - high to f - low,
+            RadioFace.passbandHz(f, low, high, PanelMode.Cwr.index, keyToneHz = 700, cwToneRises = false),
+        )
+        // CW on the X6100 (cwrise false) is the upper side. The tone does not slide it.
+        assertEquals(
+            f + low to f + high,
+            RadioFace.passbandHz(f, low, high, PanelMode.Cw.index, keyToneHz = 700, cwToneRises = false),
+        )
+        // CW on the X6200 rises with the dial, the same side as CW-R.
+        assertEquals(
+            f - high to f - low,
+            RadioFace.passbandHz(f, low, high, PanelMode.Cw.index, keyToneHz = 700, cwToneRises = true),
+        )
+        // AM, NFM, SAM and WFM are symmetric about the carrier. The low cut is not used.
+        listOf(PanelMode.Am, PanelMode.Fm, PanelMode.Sam, PanelMode.Wfm).forEach { mode ->
+            assertEquals(f - high to f + high, RadioFace.passbandHz(f, low, high, mode.index))
+        }
+        // The high edge of a lower-sideband filter is the one nearer the carrier,
+        // so the shade ends below the VFO marker.
+        val (lsbLo, lsbHi) = RadioFace.passbandHz(f, low, high, PanelMode.Lsb.index)
+        assertTrue(lsbHi < f)
+        assertTrue(lsbLo < lsbHi)
+    }
+
+    @Test
+    fun meterReadoutSitsAboveEveryScaleMark() {
+        // The card on the landscape header is about 168 by 64 px. The readout is one
+        // line. Every mark, including "+40" at the right-hand end, starts at or below
+        // that line, so "-72" cannot land on it.
+        val face = RadioFace.meterFace(cardHeightPx = 64f, readoutPx = 14f)
+        assertEquals(14f, face.readoutBottom, 0.01f)
+        assertEquals(14f, face.arcTop, 0.01f)
+        RadioFace.sMeterMarks().forEach { (mark, _) ->
+            val label = RadioFace.dialLabelTopLeft(168f, face.arcHeight, mark, 18f, 10f)
+            assertTrue(face.arcTop + label.y >= face.readoutBottom)
+        }
+        // A tall readout still ends where the arc begins. The marks stay under it.
+        val tall = RadioFace.meterFace(64f, 28f)
+        val plus40 = RadioFace.dialLabelTopLeft(168f, tall.arcHeight, 1f, 22f, 10f)
+        assertTrue(tall.arcTop + plus40.y >= tall.readoutBottom)
     }
 
     @Test

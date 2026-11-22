@@ -410,6 +410,57 @@ object RadioFace {
     }
 
     /**
+     * The arc card's two bands. The dBm readout used to be drawn on top of the dial,
+     * centred on the bottom edge, so a reading such as −72 sat on the "+40" mark.
+     * The readout now owns [readoutBottom], and every scale mark is drawn in the arc
+     * that starts there. A wider value stays in the readout band. It cannot reach a mark.
+     */
+    data class MeterFace(val readoutBottom: Float, val arcTop: Float, val arcHeight: Float)
+
+    fun meterFace(cardHeightPx: Float, readoutPx: Float): MeterFace {
+        val height = cardHeightPx.coerceAtLeast(0f)
+        val readout = readoutPx.coerceIn(0f, height)
+        return MeterFace(readout, readout, height - readout)
+    }
+
+    /** Centre of the dial, and the radius of the amber arc, inside the arc's own box. */
+    data class DialPoint(val x: Float, val y: Float)
+
+    fun dialPivot(arcWidth: Float, arcHeight: Float): DialPoint =
+        DialPoint(arcWidth / 2f, arcHeight * 0.82f)
+
+    fun dialRadius(arcWidth: Float, arcHeight: Float): Float =
+        minOf(arcWidth * 0.46f, arcHeight * 0.72f)
+
+    /**
+     * A point on the dial. [mark] is 0 at S1 and 1 at +40, the same units as
+     * [SMeterReading.needle]. [radiusFraction] is 1 on the arc, 0.58 on the labels.
+     */
+    fun dialPoint(arcWidth: Float, arcHeight: Float, mark: Float, radiusFraction: Float): DialPoint {
+        val pivot = dialPivot(arcWidth, arcHeight)
+        val radius = dialRadius(arcWidth, arcHeight) * radiusFraction
+        val rad = Math.toRadians(180.0 + mark.toDouble() * 180.0)
+        return DialPoint(
+            (pivot.x + kotlin.math.cos(rad) * radius).toFloat(),
+            (pivot.y + kotlin.math.sin(rad) * radius).toFloat(),
+        )
+    }
+
+    /** Top-left of one scale label, clamped inside the arc so it is not drawn into the readout. */
+    fun dialLabelTopLeft(
+        arcWidth: Float,
+        arcHeight: Float,
+        mark: Float,
+        labelWidth: Float,
+        labelHeight: Float,
+    ): DialPoint {
+        val at = dialPoint(arcWidth, arcHeight, mark, 0.58f)
+        val left = (at.x - labelWidth / 2f).coerceIn(0f, (arcWidth - labelWidth).coerceAtLeast(0f))
+        val top = (at.y - labelHeight / 2f).coerceIn(0f, (arcHeight - labelHeight).coerceAtLeast(0f))
+        return DialPoint(left, top)
+    }
+
+    /**
      * Landscape keys are about 56 dp wide. "TX power" becomes "TX pow…" there; these shorter
      * words are the same control, and portrait still uses the full title.
      */
@@ -556,8 +607,9 @@ object RadioFace {
         if (viewWidthPx <= 0f) return 0f
         // Waterfall-only keeps Zoom in the chip row, above this strip. Reserving the
         // corner there would push the right-hand label inward for a chip that is not
-        // on the strip. Combined and spectrum-only still reserve it when the trace is
-        // only as tall as the chip, which is landscape spectrum-plus-waterfall.
+        // on the strip. Combined and spectrum-only reserve it when the trace is short
+        // enough that the chip reaches this strip. A landscape spectrum-plus-waterfall
+        // trace is about a third of the pane, so the chip stays above the ticks.
         val chipReachesScale = layout != ScopeLayout.WATERFALL && spectrumPx <= zoomGuardPx + scalePx
         val usable = if (chipReachesScale) viewWidthPx - zoomReservePx else viewWidthPx
         return usable.coerceAtLeast(1f)
@@ -600,10 +652,14 @@ object RadioFace {
     /**
      * How a scope pane divides between the spectrum trace and the waterfall.
      *
-     * [waterfallShare] is the fraction of the whole pane (trace, scale, plan, waterfall) the
-     * waterfall should keep. On a phone lying on its side that share is about three quarters, so
-     * the scrolling history is actually readable. The trace still keeps [zoomGuardPx] when the
-     * pane can spare it, which is what holds the Zoom chip above the frequency ticks.
+     * [waterfallShare] is the fraction of the whole pane the waterfall should keep.
+     * On a phone lying on its side the trace is held at 30–35% of that pane. The scale
+     * and the band plan used to be subtracted from the trace after the waterfall had
+     * already taken about three quarters, so on an S24-class landscape scope the trace
+     * was only the zoom chip, about a 20 px ribbon, and the strips sat in the trace's
+     * budget. They now come out of what is left, which is the waterfall. The trace still
+     * keeps [zoomGuardPx] when the pane is too short for that share, which holds the
+     * Zoom chip above the frequency ticks.
      * A share of 0 is the portrait split: the trace is 40% of the room left after the scale and plan.
      * [ridge] gives the 3D plot a little of that room back. The ridges need the height; the
      * waterfall stays the larger part of a landscape pane.
@@ -629,13 +685,14 @@ object RadioFace {
             val fraction = if (ridge) 0.55f else 0.40f
             maxOf(room * fraction, minOf(zoomGuardPx, room))
         } else {
-            val share = if (ridge) {
-                (waterfallShare - 0.12f).coerceIn(0.45f, 0.9f)
-            } else {
-                waterfallShare.coerceIn(0f, 0.9f)
-            }
-            val wanted = heightPx - scalePx - planPx - heightPx * share
-            wanted.coerceIn(minOf(zoomGuardPx, room), room)
+            // 1 - share is the trace. A share of 0.68 asks for 32%. The clamp is the
+            // 30–35% the landscape face keeps, so a leftover 0.73 from an older call
+            // still lands in that band instead of shrinking the trace to the chip.
+            // The 3D field takes a little more. It stays under half, so the waterfall
+            // is still the larger part of the pane.
+            val trace = (1f - waterfallShare).coerceIn(0.30f, 0.35f)
+            val fraction = if (ridge) (trace + 0.08f).coerceAtMost(0.45f) else trace
+            (heightPx * fraction).coerceIn(minOf(zoomGuardPx, room), room)
         }
         return ScopeSplit(spectrum, (room - spectrum).coerceAtLeast(0f))
     }
@@ -776,13 +833,75 @@ object RadioFace {
         return mixArgb(colors[i - 1], colors[i], u)
     }
 
-    /** Passband edges in absolute Hz. The state stores them relative to the carrier. */
-    fun passbandHz(freqHz: Int, lowHz: Int, highHz: Int): Pair<Int, Int> {
-        val a = freqHz.toLong() + lowHz
-        val b = freqHz.toLong() + highHz
-        val lo = minOf(a, b)
-        val hi = maxOf(a, b)
-        return clampFrequency(lo) to clampFrequency(hi)
+    /**
+     * Where the filter sits on the dial, in absolute Hz, low edge then high edge.
+     *
+     * Before this, the two cuts were added to the carrier. The radio stores them as
+     * positive audio Hz for every mode (`cfg_cur_filter_low` / `cfg_cur_filter_high`,
+     * the `flo` and `fhi` of the state line), and the view flips the side. LSB at
+     * 300..2700 was therefore drawn 300..2700 Hz above the VFO, on the USB side of
+     * the marker, on both the spectrum and the waterfall.
+     *
+     * The side is `spectrum_view.c` `on_filter_change`. A lower-sideband mode is
+     * `f - high_cut .. f - low_cut`, so the whole filter is below the carrier and the
+     * edge nearer the VFO is the low cut. The radio's waterfall later slides a CW
+     * filter by the key tone so the pitch sits on the line. That slide puts the high
+     * edge of a 300..2700 Hz filter 400 Hz above the VFO when the tone is 700 Hz.
+     * The shade here stays on the side the mode listens on. [keyToneHz] is the `kt`
+     * the state line carries. It is not added.
+     *
+     * USB and DATA-U (DIGU) stay above: `f + low_cut .. f + high_cut`.
+     * LSB, DATA-L (DIGL) and RTTY stay below: `f - high_cut .. f - low_cut`.
+     * The radio has no RTTY index. RTTY runs as LSB or DATA-L, so it takes that side.
+     * CW-R is always below. CW is below only when [cwToneRises] is set, which is the
+     * X6200 (`cwrise` on the state line). CW on the X6100 stays above.
+     * AM, NFM, SAM and WFM are symmetric: `f - high_cut .. f + high_cut`.
+     *
+     * [mode] defaults to USB so a caller that already holds signed offsets, or the
+     * older two-cut check, still lands above the carrier.
+     */
+    fun passbandHz(
+        freqHz: Int,
+        lowHz: Int,
+        highHz: Int,
+        mode: Int = PanelMode.Usb.index,
+        keyToneHz: Int = 0,
+        cwToneRises: Boolean = false,
+    ): Pair<Int, Int> {
+        val (from, to) = passbandOffsets(mode, lowHz, highHz, keyToneHz, cwToneRises)
+        val a = freqHz.toLong() + from
+        val b = freqHz.toLong() + to
+        return clampFrequency(minOf(a, b)) to clampFrequency(maxOf(a, b))
+    }
+
+    /**
+     * The same edges as Hz from the carrier, before they are added to the dial.
+     * The first of the pair is the low side of the filter, the second the high side.
+     */
+    @Suppress("UNUSED_PARAMETER") // keyToneHz is documented above: accepted, not added.
+    fun passbandOffsets(
+        mode: Int,
+        lowHz: Int,
+        highHz: Int,
+        keyToneHz: Int = 0,
+        cwToneRises: Boolean = false,
+    ): Pair<Int, Int> {
+        // keyToneHz is the state's kt. It is accepted with the rest of the state and
+        // not added: a tone inside the filter would slide the high edge across the carrier.
+        return when (PanelMode.fromIndex(mode)) {
+            PanelMode.Lsb, PanelMode.DigL -> -highHz to -lowHz
+            PanelMode.Usb, PanelMode.DigU -> lowHz to highHz
+            PanelMode.Cw, PanelMode.Cwr -> {
+                // radio_cw_tone_dir: CW-R is always the lower side. CW is the lower side
+                // only when the radio's own CW tone rises with the dial (cwrise, the X6200).
+                // The key tone is not added: the filter stays wholly on that side.
+                val below = mode == PanelMode.Cwr.index || (mode == PanelMode.Cw.index && cwToneRises)
+                if (below) -highHz to -lowHz else lowHz to highHz
+            }
+            PanelMode.Am, PanelMode.Fm, PanelMode.Sam, PanelMode.Wfm -> -highHz to highHz
+            // An index this build does not number. Two positive cuts are the upper side.
+            null -> lowHz to highHz
+        }
     }
 
     fun nudgeFilter(lowHz: Int, highHz: Int, field: AdjustField, direction: Int): Pair<Int, Int> {
