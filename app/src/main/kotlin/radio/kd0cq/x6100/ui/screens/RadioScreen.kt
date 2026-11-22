@@ -82,8 +82,8 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
     val plan by viewModel.plan.collectAsState()
     val spots by viewModel.spots.collectAsState()
     // The spectrum is collected inside the scope pane. Collecting it here recomposed the keys,
-    // the header and PTT on every FFT frame.
-    val cw by viewModel.cwLines.collectAsState()
+    // the header and PTT on every FFT frame. The CW decoder text is not collected here either:
+    // painting it on the scope covered the waterfall. RadioLink still keeps the lines.
     val role by viewModel.role.collectAsState()
     val control by viewModel.control.collectAsState()
     val keyed by viewModel.pttKeyed.collectAsState()
@@ -140,7 +140,6 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                 bands = bands,
                 plan = plan,
                 spots = spots,
-                cw = cw.lastOrNull(),
                 canOperate = canOperate,
                 mayKey = mayKey,
                 controlMine = control.mine,
@@ -170,7 +169,6 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                     bands = bands,
                     plan = plan,
                     spots = spots,
-                    cw = cw.lastOrNull(),
                     canOperate = canOperate,
                     volumeMax = volumeMax,
                     controlMine = control.mine,
@@ -252,7 +250,6 @@ private fun LandscapeOperating(
     bands: List<Band>,
     plan: List<radio.kd0cq.x6100.net.PlanSegment>,
     spots: List<radio.kd0cq.x6100.net.Spot>,
-    cw: String?,
     canOperate: Boolean,
     mayKey: Boolean,
     controlMine: Boolean,
@@ -284,7 +281,6 @@ private fun LandscapeOperating(
             state = state,
             plan = plan,
             spots = spots,
-            cwLine = cw,
             canOperate = canOperate,
             onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
             onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
@@ -454,7 +450,6 @@ private fun PortraitOperating(
     bands: List<Band>,
     plan: List<radio.kd0cq.x6100.net.PlanSegment>,
     spots: List<radio.kd0cq.x6100.net.Spot>,
-    cw: String?,
     canOperate: Boolean,
     volumeMax: Int,
     controlMine: Boolean,
@@ -492,7 +487,6 @@ private fun PortraitOperating(
                     state = state,
                     plan = plan,
                     spots = spots,
-                    cwLine = cw,
                     canOperate = canOperate,
                     onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
                     onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },

@@ -108,7 +108,13 @@ class RadioLink(
 
     private val _cwLines = MutableStateFlow<List<String>>(emptyList())
 
-    /** The CW decoder's text, newest last. */
+    /**
+     * The CW decoder's text, newest last.
+     *
+     * The scope does not paint this. A line of decode along the bottom of every
+     * layout covered the band plan and the last waterfall rows. The lines stay
+     * here so a decoder surface can read them; the spectrum layouts do not.
+     */
     val cwLines: StateFlow<List<String>> = _cwLines.asStateFlow()
 
     private val _receipts = MutableStateFlow<List<LoggedReceipt>>(emptyList())

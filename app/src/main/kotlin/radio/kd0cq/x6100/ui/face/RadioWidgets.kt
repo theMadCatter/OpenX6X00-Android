@@ -170,6 +170,24 @@ private val PillShape = RoundedCornerShape(6.dp)
 private val KeyShape = RoundedCornerShape(10.dp)
 private val Mono = FontFamily.Monospace
 
+/**
+ * The frequency scale under the trace. The 10 sp labels need this much.
+ */
+private val ScaleBand = 16.dp
+
+/**
+ * The band-plan strip. It was 14 dp, and a decoder line was drawn on top of it,
+ * so every layout lost a thick band at the bottom of the waterfall. 8 dp keeps
+ * the colour and the short label (SSB, CW, DIG) and gives that height back.
+ */
+private val PlanBand = 8.dp
+
+/**
+ * How much of the right edge the Zoom chip owns when it reaches the scale.
+ * "Zoom x8" plus its padding is inside this. The labels stop short of it.
+ */
+private val ZoomLabelReserve = 72.dp
+
 @Composable
 fun Pill(
     text: String,
@@ -618,7 +636,6 @@ fun SpectrumStack(
     state: RadioState?,
     plan: List<PlanSegment>,
     spots: List<Spot>,
-    cwLine: String?,
     canOperate: Boolean,
     onTuneHz: (Int) -> Unit,
     onKnob: (Int) -> Unit,
@@ -649,7 +666,6 @@ fun SpectrumStack(
     // does not draw the raw frame, and a rotation starts from the next frame rather
     // than from a trace that belonged to a different pixel width.
     val spectrumTrace = remember { SpectrumTrace() }
-    val gridDash = remember { PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f) }
     val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
     var mapName by rememberSaveable { mutableStateOf(WfColormap.GAUSS.name) }
@@ -667,7 +683,6 @@ fun SpectrumStack(
     var paneWidth by remember { mutableIntStateOf(0) }
     var paneHeight by remember { mutableIntStateOf(0) }
     var waterRows by remember { mutableIntStateOf(0) }
-    val density = LocalDensity.current
     LaunchedEffect(drawScope, frame?.sequence, frame?.centreHz, frame?.widthHz) {
         if (!drawScope) return@LaunchedEffect
         val current = frame ?: return@LaunchedEffect
@@ -709,8 +724,11 @@ fun SpectrumStack(
     val labelStyle = TextStyle(color = RfGuru.dim, fontSize = 10.sp, fontFamily = Mono)
     val spotStyle = TextStyle(color = RfGuru.blue, fontSize = 10.sp, fontFamily = Mono, fontWeight = FontWeight.Medium)
     val alertStyle = spotStyle.copy(color = Color(0xFFF472B6))
-    val planText = TextStyle(color = RfGuru.bg, fontSize = 9.sp, fontFamily = Mono, fontWeight = FontWeight.Bold)
-    val cwStyle = TextStyle(color = RfGuru.goldText, fontSize = 12.sp, fontFamily = Mono)
+    val planText = TextStyle(color = RfGuru.bg, fontSize = 8.sp, fontFamily = Mono, fontWeight = FontWeight.Bold)
+    val density = LocalDensity.current
+    // freq_scale.c uses a 4 px dash. In dp the pattern stays a dash when the stroke is 1 dp.
+    val dashPx = with(density) { FirmwareLook.GRID_DASH.dp.toPx() }
+    val gridDash = remember(dashPx) { PathEffect.dashPathEffect(floatArrayOf(dashPx, dashPx), 0f) }
 
     Box(
         modifier
@@ -722,8 +740,8 @@ fun SpectrumStack(
     ) {
         // The split depends on the 2D/3D choice, not only on the pane's size. onSizeChanged
         // does not run again when the chip is tapped, so the waterfall depth is recomputed here.
-        val scalePx = with(density) { 16.dp.toPx() }
-        val planPx = with(density) { 14.dp.toPx() }
+        val scalePx = with(density) { ScaleBand.toPx() }
+        val planPx = with(density) { PlanBand.toPx() }
         val guardPx = with(density) { 24.dp.toPx() }
         LaunchedEffect(paneWidth, paneHeight, ridge, waterfallShare, scalePx, planPx, guardPx, scopeLayout) {
             if (paneWidth <= 0 || paneHeight <= 0) return@LaunchedEffect
@@ -799,10 +817,11 @@ fun SpectrumStack(
                     }
                 },
         ) {
-            val scaleH = 16.dp.toPx()
-            val planH = 14.dp.toPx()
-            // Zoom sits in the top-right of the trace. The split keeps that band at least as
-            // tall as the chip, so "Zoom x1" cannot land on the last frequency tick.
+            val scaleH = ScaleBand.toPx()
+            val planH = PlanBand.toPx()
+            // Zoom sits in the top-right. The split keeps the trace at least as tall as
+            // that chip. On landscape S+W the trace is only that tall, so the right-hand
+            // frequency label is reserved out of the chip below, in scaleLabelWidth.
             val zoomGuard = 24.dp.toPx()
             val split = RadioFace.scopeSplit(
                 size.height, scaleH, planH, waterfallShare, zoomGuard, ridge, scopeLayout,
@@ -834,10 +853,20 @@ fun SpectrumStack(
                 // drawn first. The solid line-coloured fill then covers it up to the trace, so a
                 // held peak shows only where it still stands above the signal. Strokes are raw
                 // pixels, so the edge stays a hairline at the phone's density.
+                //
+                // The combined view keeps the radio's 48 dB colour window: that band is about as
+                // tall as the radio's spectrum widget, so the trace fills it. Spectrum-only gives
+                // this same trace the whole pane. On that pane the 48 dB window left the trace as
+                // a ribbon and the rest of the pane empty. The pane scale puts the loudest bin at
+                // the top and the noise at the bottom, which is what the 3D field already does
+                // with this height. Transmit still uses S4..S9+20.
                 drawRect(packedArgb(FirmwareLook.PANEL), size = Size(size.width, specH))
                 val samples = size.width.roundToInt().coerceIn(2, 4096)
-                val minDb = window.first.toFloat()
-                val maxDb = window.second.toFloat()
+                val (minDb, maxDb) = if (scopeLayout == ScopeLayout.SPECTRUM && state?.transmitting != true) {
+                    FirmwareLook.paneWindow(leveler.noiseDb, spectrumTrace.loudest())
+                } else {
+                    window.first.toFloat() to window.second.toFloat()
+                }
                 val peakLine = Path()
                 val fill = Path()
                 var drew = false
@@ -890,9 +919,16 @@ fun SpectrumStack(
                 val ticks = RadioFace.scaleTicks(hzSpan, maxLabels)
                 val measured = ticks.map { measurer.measure(RadioFace.scaleLabel(it), labelStyle) }
                 val centers = ticks.map { RadioFace.fractionForHz(it, hzSpan).coerceIn(0f, 1f) * size.width }
-                // If the box is too short to put the scale under the chip, keep the last
-                // label out of the chip's corner instead of drawing 14.150 through "Zoom x1".
-                val labelWidth = if (specH + 2f < zoomGuard) (size.width - 72.dp.toPx()).coerceAtLeast(1f) else size.width
+                // Landscape S+W holds the trace at the Zoom chip's height, so the right-hand
+                // label sits under the chip. scaleLabelWidth reserves that corner. A taller
+                // trace keeps the full width: the scale is then below the chip.
+                val labelWidth = RadioFace.scaleLabelWidth(
+                    size.width,
+                    specH,
+                    zoomGuard,
+                    scaleH,
+                    ZoomLabelReserve.toPx(),
+                )
                 val lefts = RadioFace.placeScaleLabels(
                     centers,
                     measured.map { it.size.width.toFloat() },
@@ -902,16 +938,6 @@ fun SpectrumStack(
                 ticks.indices.forEach { i ->
                     val x = centers[i]
                     drawLine(RfGuru.mute, Offset(x, specH), Offset(x, specH + scaleH), strokeWidth = 1f)
-                    // freq_scale.c: a 4 px dash, 4 px gap, down the waterfall at each reference.
-                    if (waterH > 1f) {
-                        drawLine(
-                            packedArgb(FirmwareLook.GRID).copy(alpha = FirmwareLook.GRID_OPA / 255f),
-                            Offset(x, waterTop),
-                            Offset(x, waterTop + waterH),
-                            strokeWidth = 1f,
-                            pathEffect = gridDash,
-                        )
-                    }
                     val left = lefts[i] ?: return@forEach
                     drawText(measured[i], topLeft = Offset(left, specH + 1f))
                 }
@@ -925,9 +951,10 @@ fun SpectrumStack(
                     )
                     if (slice.label.isNotEmpty() && right - left > 28f) {
                         val measured = measurer.measure(slice.label, planText)
+                        val labelY = specH + scaleH + ((planH - measured.size.height) / 2f).coerceAtLeast(0f)
                         drawText(
                             measured,
-                            topLeft = Offset(left + (right - left - measured.size.width) / 2f, specH + scaleH + 1f),
+                            topLeft = Offset(left + (right - left - measured.size.width) / 2f, labelY),
                         )
                     }
                 }
@@ -954,6 +981,24 @@ fun SpectrumStack(
                             topLeft = Offset(bandLeft, waterTop),
                             size = Size(bandWidth, waterH),
                         )
+                    }
+                    // freq_scale.c: text colour #F1F5F9 at LV_OPA_40, a 4 px dash and a 4 px gap,
+                    // down the waterfall only. The radio's stroke is 1 px on an 800-wide panel.
+                    // One phone pixel is thinner than that and disappears on Gauss, including
+                    // where this passband shade is drawn over the line, so the stroke is 1 dp
+                    // and it is drawn after the shade. The colour and the opacity stay the radio's.
+                    if (waterH > 1f) {
+                        val dashColor = packedArgb(FirmwareLook.GRID).copy(alpha = FirmwareLook.GRID_OPA / 255f)
+                        val dashWidth = 1.dp.toPx().coerceAtLeast(1f)
+                        for (x in centers) {
+                            drawLine(
+                                dashColor,
+                                Offset(x, waterTop),
+                                Offset(x, waterTop + waterH),
+                                strokeWidth = dashWidth,
+                                pathEffect = gridDash,
+                            )
+                        }
                     }
                     val vfoX = RadioFace.fractionForHz(radio.freqHz, hzSpan).coerceIn(0f, 1f) * size.width
                     val cw = radio.mode == PanelMode.Cw.index || radio.mode == PanelMode.Cwr.index
@@ -993,11 +1038,9 @@ fun SpectrumStack(
                 }
             }
 
-            cwLine?.takeIf { it.isNotBlank() }?.let { line ->
-                drawRect(Color.Black.copy(alpha = 0.55f), topLeft = Offset(0f, size.height - 18.dp.toPx()), size = Size(size.width, 18.dp.toPx()))
-                val measured = measurer.measure(line, cwStyle)
-                drawText(measured, topLeft = Offset(6.dp.toPx(), size.height - 16.dp.toPx()))
-            }
+            // The CW decoder used to be drawn here, a gold line on a black bar across the
+            // bottom of every layout. That covered the band plan and the last waterfall
+            // rows. The text still arrives on the link; it is not painted on the scope.
             // The back rows sit under the chips. A short dark fade keeps the labels readable
             // without a second hit target over the drag and pinch gestures.
             val shade = 32.dp.toPx()

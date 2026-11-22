@@ -422,3 +422,19 @@ What the RF.Guru defaults actually draw, and what the phone does now:
 `./gradlew testDebugUnitTest assembleDebug` after this: 221 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
 
 Not on the wire, so not drawn: the separate spectrum FFT, waterfall speeds other than the default 15 lines/s, the Fixed-mode dimmed side trace, the notch, the RTTY/NAVTEX/WEFAX tone lines, a red marker while the recorder is on, and the DRM-plane Wu plot (Compose's stroke is the antialiasing). Auto level is the default; the manual −121..−73 grid is not sent as its own scale.
+
+## Live check of a84e1f1
+
+What already matched the radio, and stayed: the waterfall contrast (dark floor, signals pop), the solid fill, the marker and the passband, the 3D field, the spot labels, and the view surviving rotation.
+
+What the live set showed, and the cause of each:
+
+1. **Landscape 2D spectrum-only was a short ribbon with empty pane around it.** `scopeSplit` already gives spectrum-only the whole room above the scale and the plan, in both aspects. That is the same room the 3D field fills. The 2D trace was still on the waterfall's 48 dB colour window. The radio's spectrum widget is about 76 px (`p_spectrum_height`), so that window fills it. The phone's spectrum-only pane is the whole scope, and the same window left the trace on the floor. Spectrum-only now scales from the tracked noise (not the colour window's S8 clamp) to the loudest smoothed bin: the peak sits at 94% of the pane and the noise at 12%, with at least 12 dB of span so a quiet band does not become a solid block. The combined view keeps the 48 dB window. Transmit keeps S4..S9+20. Portrait spectrum-only uses that same full room, which is the scope column left after the keys, the meter and the sliders, not the 40% combined split and not past the column.
+
+2. **The frequency dashes were invisible on a live Gauss waterfall.** `freq_scale.c` draws them in `TC(text)` `#F1F5F9` at `LV_OPA_40` (102), a 4 px dash and a 4 px gap, 1 px wide, down the waterfall only. The phone had that colour and that opacity, and a 1 px stroke. One phone pixel is antialiased away on Gauss, and the passband shade was drawn over the line. The stroke is now 1 dp, the pattern is 4 dp on and 4 dp off, the dashes are drawn after the shade, and the colour and the opacity are unchanged. They still stop at the waterfall. They do not cross the spectrum.
+
+3. **A gold decoder line and the green SSB plan ate the bottom of every layout.** The line was the CW decoder (`T T T GG …`), painted on an 18 dp black bar across the bottom of the scope canvas, on top of the waterfall and the plan. The plan was 14 dp, and on a phone span it is often one green SSB segment. The decoder line is no longer painted on any scope layout. `RadioLink.cwLines` still keeps the text. The plan is 8 dp, with the label centred in that strip, so the colour stays and the waterfall gets the height back. The filter passband (the vertical shade) is unchanged.
+
+4. **Landscape S+W put the right-hand frequency label under Zoom.** The inset ran only when `specH + 2 < zoomGuard`. The split already lifts that trace up to the guard, so the test was false and the label used the full width. The reserve now runs when the spectrum is no taller than the guard plus the scale, which is the landscape combined layout. A taller trace (portrait, or spectrum on its own) still uses the full width, because the scale is then below the chip.
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 225 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.

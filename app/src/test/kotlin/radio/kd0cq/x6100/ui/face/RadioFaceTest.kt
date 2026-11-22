@@ -206,6 +206,57 @@ class RadioFaceTest {
     }
 
     @Test
+    fun spectrumOnlyFillsThePaneInBothAspects() {
+        // Landscape scope after the header and the keys. Spectrum-only keeps that
+        // room. The waterfall share must not leave a black band under a short trace.
+        val wide = RadioFace.scopeSplit(
+            240f, 16f, 8f, waterfallShare = 0.73f, zoomGuardPx = 24f,
+            ridge = false, layout = ScopeLayout.SPECTRUM,
+        )
+        assertEquals(0f, wide.waterfallPx, 0.01f)
+        assertEquals(216f, wide.spectrumPx, 0.01f)
+        val wideBoth = RadioFace.scopeSplit(240f, 16f, 8f, waterfallShare = 0.73f, zoomGuardPx = 24f)
+        assertTrue(wide.spectrumPx > wideBoth.spectrumPx * 3f)
+
+        // Portrait scope is the column left after the keys, the meter and the sliders.
+        // Spectrum-only uses that column, not the 40% combined split, and not past it.
+        val tall = RadioFace.scopeSplit(
+            640f, 16f, 8f, waterfallShare = 0f, zoomGuardPx = 24f,
+            ridge = false, layout = ScopeLayout.SPECTRUM,
+        )
+        val tallBoth = RadioFace.scopeSplit(640f, 16f, 8f, waterfallShare = 0f, zoomGuardPx = 24f)
+        assertEquals(0f, tall.waterfallPx, 0.01f)
+        assertEquals(616f, tall.spectrumPx, 0.01f)
+        assertTrue(tall.spectrumPx > tallBoth.spectrumPx * 2f)
+        assertTrue(tall.spectrumPx < 640f)
+    }
+
+    @Test
+    fun theRightFrequencyLabelStaysClearOfTheZoomChip() {
+        // Landscape S+W lifts the spectrum to the zoom guard. The old test
+        // (spectrum + 2 < guard) was false in that case, so the right-hand label
+        // was drawn through the Zoom chip.
+        val width = 900f
+        val guard = 66f
+        val scale = 44f
+        val reserve = 180f
+        val usable = RadioFace.scaleLabelWidth(width, guard, guard, scale, reserve)
+        assertEquals(width - reserve, usable, 0.01f)
+        val lefts = RadioFace.placeScaleLabels(
+            centersPx = listOf(0f, width),
+            widthsPx = listOf(50f, 50f),
+            viewWidthPx = usable,
+            gapPx = 8f,
+        )
+        assertNotNull(lefts[1])
+        assertTrue(lefts[1]!! + 50f <= width - reserve + 0.1f)
+        val tall = RadioFace.scaleLabelWidth(
+            width, spectrumPx = 400f, zoomGuardPx = guard, scalePx = scale, zoomReservePx = reserve,
+        )
+        assertEquals(width, tall, 0.01f)
+    }
+
+    @Test
     fun keyNamesPackOntoRowsThatFitTheWidth() {
         val names = listOf("GEN", "KEY", "DFN", "BAND_DOWN", "BAND_UP", "APP", "MSG")
         val rows = RadioFace.packKeyRows(names, widthDp = 180f)
