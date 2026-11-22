@@ -87,6 +87,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
@@ -106,11 +108,14 @@ import radio.kd0cq.x6100.ui.theme.RfGuru
 import radio.kd0cq.x6100.ui.theme.packedArgb
 
 /**
- * One bitmap at the view's pixel size. Each pixel is interpolated between the FFT bins at that
- * frequency, so the bitmap is never a narrow strip that the canvas then stretches into blocks.
- * A short history is stretched down the pane (see [WaterfallDisplay.historyRowAt]) until there
- * is a row per pixel. The same bitmap is rewritten as frames arrive; a new one is made only
- * when the pane changes size.
+ * One ARGB_8888 bitmap at the pane's pixel size, density none.
+ *
+ * Before, the bitmap adopted the display density and each pixel was a blend of the bins
+ * beside it, and a short history was stretched so one line covered several pixels. A
+ * density-aware draw then scaled that bitmap up again. The bitmap is now the screen pixels
+ * themselves: one stored pixel per screen pixel, nearest bin or the loudest bin in the
+ * pixel, one history line per row. It is drawn at that size with no filter. A new bitmap
+ * is made only when the pane changes size; the same one is rewritten as frames arrive.
  */
 private class WaterfallSheet {
     private var bitmap: Bitmap? = null
@@ -129,19 +134,28 @@ private class WaterfallSheet {
         val view = rows.first()
         var bmp = bitmap
         if (bmp == null || bmp.width != width || bmp.height != height) {
+            // DENSITY_NONE: createBitmap otherwise stamps the display density, and a later
+            // draw that honours density turns one stored pixel into density/160 screen
+            // pixels. The bitmap is already in screen pixels. ARGB_8888 keeps the 256-colour
+            // table; RGB_565 would crush it.
             bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bmp.density = Bitmap.DENSITY_NONE
             bitmap = bmp
             image = bmp.asImageBitmap()
         }
         val need = width * height
         if (pixels.size != need) pixels = IntArray(need)
         val blank = colors.first()
-        // Stretch a short history so every pixel of the pane is a row. A 1:1 map left the
-        // bottom half black until a row had arrived for every pixel, which a 10-frame
-        // stream does not do in the time the operator is looking at it.
+        // One line, one pixel. A y past the lines received so far stays the floor colour
+        // instead of a copy of an older line stretched to fill the pane.
         for (y in 0 until height) {
             val offset = y * width
-            val row = rows[WaterfallDisplay.historyRowAt(y, height, rows.size)]
+            val rowIndex = WaterfallDisplay.historyRowAt(y, height, rows.size)
+            if (rowIndex < 0) {
+                pixels.fill(blank, offset, offset + width)
+                continue
+            }
+            val row = rows[rowIndex]
             if (row.db.isEmpty() || row.widthHz <= 0 || view.widthHz <= 0) {
                 pixels.fill(blank, offset, offset + width)
                 continue
@@ -652,8 +666,8 @@ fun SpectrumStack(
         if (!drawScope) return@LaunchedEffect
         spectrum.collect { next -> frame = next }
     }
-    // Start at the firmware's cap, then trim to the pane so a tall landscape waterfall keeps a
-    // row per pixel instead of stretching 48 rows into blocks.
+    // One line per pixel of this pane, up to the phone cap. The radio's own buffer is 480,
+    // which is its screen, not a tall phone waterfall.
     val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
     // Paths and the sample scratch are draw buffers. The history they read is [ridgeHold],
     // which the screen keeps across rotation. A ring allocated here would be empty after
@@ -903,11 +917,12 @@ fun SpectrumStack(
             }
 
             if (waterfall != null && waterH > 1f) {
-                // The bitmap is already the view's pixel size. Stretching it here is what made
-                // the blocks, so it is drawn 1:1 and any leftover pixel stays the background.
+                // The bitmap is already one pixel per screen pixel. dstSize is that size, and
+                // the filter is nearest, so a mismatch cannot bilinear-scale the lines.
                 drawImage(
                     image = waterfall,
-                    dstOffset = androidx.compose.ui.unit.IntOffset(0, waterTop.roundToInt()),
+                    dstOffset = IntOffset(0, waterTop.roundToInt()),
+                    dstSize = IntSize(waterfall.width, waterfall.height),
                     filterQuality = FilterQuality.None,
                 )
             }

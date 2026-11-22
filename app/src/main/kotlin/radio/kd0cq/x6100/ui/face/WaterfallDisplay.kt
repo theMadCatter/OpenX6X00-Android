@@ -5,21 +5,30 @@
 // Waterfall colour and geometry, with no Android types so the unit tests can run it.
 //
 // The phone used to paint each FFT bin as one bitmap column and then stretch that bitmap
-// to the view. On a landscape phone that is about two pixels per bin, so the waterfall
-// was a field of hard blocks, and a new noise percentile every frame made the colours pump.
+// to the view, which turned a landscape phone into hard blocks. The next pass sampled
+// every screen pixel with a linear blend between the two bins beside it. On a pane wider
+// than 1024 bins that blend is a ramp where the bin is flat, and on a narrower pane the
+// sample at the pixel centre drops any bin that does not land there. A short history was
+// also stretched down the pane, so one line occupied several pixels.
 //
-// This follows the firmware (wf_palettes.c, waterfall_view.c, theme.c):
-// - Classic and Gauss are the 256-entry tables. Grey, Fire, Ice and Rainbow are the same
-//   stops theme.c ramps with theme_ramp_palette, steps = 0 (smooth).
-// - A pixel samples the bins on either side of its frequency, the way row_pixels does.
+// What is drawn now:
+// - The bitmap is the pane's own pixels, one stored pixel per screen pixel. A line is one
+//   pixel tall. A pixel below the rows received so far stays the floor colour.
+// - Where a pixel is one bin or narrower, it copies that bin (nearest). Where the pixel
+//   covers several bins, it keeps the loudest, so a carrier between pixel centres survives.
+// - Classic and Gauss are the 256-entry tables in wf_palettes.c. Grey, Fire, Ice and
+//   Rainbow are the stops theme.c ramps with theme_ramp_palette, steps = 0.
 // - The colour window is the radio's: 5 dB under the tracked noise floor, across 48 dB.
 //
 // The Panel socket cannot ask for a bigger FFT or a faster spectrum. remote_server.c
-// always sends WATERFALL_NFFT (1024) int8 bins, one frame each time the DSP has a new
-// one, and it skips a frame while 16 KB is still queued. There is no rate or size command.
+// panel_thread always copies WATERFALL_NFFT (RADIO_SAMPLES * 2 = 1024) int8 bins, one
+// frame each time the DSP has a new one, and it skips a frame while 16 KB is still queued.
+// There is no rate or size command. The painter uses however many bins the header carries.
 
 package radio.kd0cq.x6100.ui.face
 
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /** The waterfall palettes the radio offers on its Display page, in the firmware's order. */
@@ -143,8 +152,13 @@ object WaterfallDisplay {
         "f4f497f4f497f4f49bf5f59ff5f5a3f6f6a7f6f6abf6f6abf6f6aff7f7b3f7f7b7f8f8bbf8f8bff8f8c3f8f8c3f9f9c7" +
         "f9f9cbfafacffafad2fafad7fafad7fbfbdbfbfbdffcfce3fcfce7fcfcebfcfcebfdfdeffdfdf3fefef7fefefbffffff"
 
-    /** Firmware MAX_HEIGHT. A phone waterfall is shorter than the radio's 480, and we keep that many rows. */
-    const val MAX_ROWS = 480
+    /**
+     * How many lines the phone keeps. The radio's own buffer is its screen (MAX_HEIGHT,
+     * 480 on the 800×480 panel). Stopping there left a taller phone pane with 480 lines
+     * and empty pixels under them, or with those lines stretched. One line is one pixel,
+     * so the cap is a tall pane, not the radio's screen.
+     */
+    const val MAX_ROWS = 4096
 
     private val gauss: IntArray by lazy { decode(GAUSS_HEX) }
     private val classic: IntArray by lazy { decode(CLASSIC_HEX) }
@@ -244,13 +258,75 @@ object WaterfallDisplay {
         return a + (b - a) * frac
     }
 
-    /** Firmware waterfall_data: (db − min) * 255 / (max − min), truncated, held inside 0..255. */
+    /**
+     * Firmware waterfall_data: (db − min) * 255 / (max − min), truncated, held inside 0..255.
+     *
+     * The tables are 256 entries and this index walks all of them across the 48 dB window,
+     * about five entries per dB. The socket's sample is already an int8, so the fraction
+     * this truncates is under one table step. A dither on that fraction would grain the
+     * floor and would not recover a bin the radio never sent. The firmware dithers only
+     * its 1-bit ink theme; the colour path stores the truncated index. This does the same.
+     */
     fun paletteIndex(db: Float, floor: Int, ceiling: Int): Int {
         val span = (ceiling - floor).coerceAtLeast(1)
         val scaled = (db - floor) / span * 255f
         if (scaled <= 0f) return 0
         if (scaled >= 255f) return 255
         return scaled.toInt()
+    }
+
+    /**
+     * The dB one screen pixel shows of this row.
+     *
+     * Before: [sampleBin] blended the two bins beside the pixel's centre. A pane wider than
+     * the FFT turned each bin into a ramp, and a pane narrower than the FFT kept only the
+     * bin under the centre, so a carrier between centres was weakened or missed. Zoom made
+     * the ramp wider, because the same bins were spread across the pane.
+     *
+     * A pixel that covers one bin or less copies the bin under its centre, so a magnified
+     * bin is a flat run of pixels. A pixel that covers more than one bin keeps the loudest
+     * of them. A pixel outside this row is null; the painter uses the floor colour there.
+     * [bins] is the live length when the array is a reused slot longer than the frame.
+     */
+    fun crispDb(
+        db: ByteArray,
+        rowCentreHz: Int,
+        rowWidthHz: Int,
+        viewCentreHz: Int,
+        viewWidthHz: Int,
+        pixel: Int,
+        pixels: Int,
+        bins: Int = db.size,
+    ): Float? {
+        val n = bins.coerceIn(0, db.size)
+        if (n == 0 || pixels <= 0 || viewWidthHz <= 0 || rowWidthHz <= 0) return null
+        val viewLeft = viewCentreHz - viewWidthHz / 2f
+        val rowLeft = rowCentreHz - rowWidthHz / 2f
+        val scale = n / rowWidthHz.toFloat()
+        var b0 = (viewLeft + pixel * viewWidthHz / pixels.toFloat() - rowLeft) * scale
+        var b1 = (viewLeft + (pixel + 1) * viewWidthHz / pixels.toFloat() - rowLeft) * scale
+        if (b1 < b0) {
+            val swap = b0
+            b0 = b1
+            b1 = swap
+        }
+        if (b1 <= 0f || b0 >= n.toFloat()) return null
+        if (b1 - b0 <= 1f) {
+            val centre = (b0 + b1) / 2f
+            if (centre < 0f || centre >= n.toFloat()) return null
+            return db[centre.toInt().coerceIn(0, n - 1)].toFloat()
+        }
+        // Bins whose span [i, i+1) overlaps [b0, b1). An edge that lands on an integer
+        // does not include the bin that starts there.
+        val first = floor(b0.toDouble()).toInt().coerceAtLeast(0)
+        val last = (ceil(b1.toDouble()).toInt() - 1).coerceAtMost(n - 1)
+        if (last < first) return null
+        var peak = db[first].toInt()
+        for (i in first + 1..last) {
+            val value = db[i].toInt()
+            if (value > peak) peak = value
+        }
+        return peak.toFloat()
     }
 
     fun colorAt(
@@ -265,25 +341,22 @@ object WaterfallDisplay {
         ceiling: Int,
         colors: IntArray,
     ): Int {
-        val hz = hzAtPixel(pixel, pixels, viewCentreHz, viewWidthHz)
-        val index = binAtHz(hz, rowCentreHz, rowWidthHz, db.size)
-        val sample = sampleBin(db, index)
+        val sample = crispDb(db, rowCentreHz, rowWidthHz, viewCentreHz, viewWidthHz, pixel, pixels)
         val level = if (sample == null) 0 else paletteIndex(sample, floor, ceiling)
         return colors[level.coerceIn(0, colors.lastIndex)]
     }
 
     /**
-     * Which history row paints pixel [y]. Newest is 0.
+     * Which history row paints pixel [y]. Newest is 0. No row for that pixel is −1.
      *
-     * One row per pixel once the history is as tall as the pane. Fewer rows than pixels are
-     * stretched so the pane is full: leaving the bottom at the darkest palette stop is the empty
-     * band under a short history. The last pixel is the oldest row that is actually drawn.
+     * One incoming line is one pixel. A pixel past the lines received so far is empty,
+     * so a line is never stretched across several pixels while the history fills, and a
+     * taller pane shows more lines rather than a taller copy of the same lines. When more
+     * lines are kept than the pane is tall, the newest [height] are the ones on screen.
      */
     fun historyRowAt(y: Int, height: Int, rowCount: Int): Int {
-        if (height <= 0 || rowCount <= 0) return 0
-        val shown = minOf(rowCount, height)
-        val index = ((y.coerceAtLeast(0).toLong() * shown) / height).toInt()
-        return index.coerceIn(0, shown - 1)
+        if (height <= 0 || rowCount <= 0 || y < 0 || y >= height || y >= rowCount) return -1
+        return y
     }
 
     /**

@@ -438,3 +438,71 @@ What the live set showed, and the cause of each:
 4. **Landscape S+W put the right-hand frequency label under Zoom.** The inset ran only when `specH + 2 < zoomGuard`. The split already lifts that trace up to the guard, so the test was false and the label used the full width. The reserve now runs when the spectrum is no taller than the guard plus the scale, which is the landscape combined layout. A taller trace (portrait, or spectrum on its own) still uses the full width, because the scale is then below the chip.
 
 `./gradlew testDebugUnitTest assembleDebug` after this: 225 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+## Waterfall resolution
+
+What was limiting the picture, all of it on the phone. The socket was already delivering every bin it has.
+
+- Frequency. `WaterfallDisplay.colorAt` called `sampleBin`, which linearly blends the two bins beside a pixel's centre. On a pane wider than 1024 bins each bin became a ramp. On a pane narrower than 1024 the sample at the centre dropped any bin that did not land there, so a one-bin carrier could vanish. Zoom spread the same bins across the width, so the ramp got wider.
+- Time. `historyRowAt` stretched the lines received so far down the bitmap, so one line occupied several pixels while the history filled. `MAX_ROWS` was 480, the radio's screen buffer (`MAX_HEIGHT` / `BOARD_DISP_H`). The bitmap was already drawn 1:1, so a taller pane was capped at 480 lines and the rest of the pane was empty.
+- Density. `Bitmap.createBitmap` stamps the display density. A draw that honours density turns one stored pixel into density/160 screen pixels. The canvas draw also left the destination size implicit.
+- Colour. The palettes were already 256 entries (Gauss and Classic from `wf_palettes.c`; Grey, Fire, Ice and Rainbow from `theme_ramp_palette` with steps 0). `paletteIndex` truncates `(db - floor) / span * 255`. Over the 48 dB window that is about five table steps per decibel, and the truncation is under one step. The firmware dithers only the 1-bit mono theme (`wf_pixel` / `mono_dither`). Dither was not added. The bitmap stays `ARGB_8888`; `RGB_565` would crush the table.
+- Averaging on the phone. The blend and the vertical stretch were the smear. The spectrum trace's rise 0.6 / fall 0.2 is the 2D line (`FirmwareLook.levelAt` still uses `sampleBin`) and was left. `WaterfallLeveler` still recolours every row from the live window; that is the radio's colour window and it stays. Nothing bakes a colour into a row.
+
+What changed:
+
+- `crispDb`. A pixel that covers one bin or less copies the bin under its centre, so a magnified bin is a flat run. A pixel that covers more than one bin keeps the loudest, so a carrier between centres survives. A pixel outside the row is the floor colour.
+- `historyRowAt` returns the pixel's own line, or −1 once the lines run out. A short history is floor colour below the lines received, not a stretched copy. `MAX_ROWS` is 4096. `SpectrumHistory` is still resized to the waterfall's pixel height, so a taller pane keeps more time, up to that cap.
+- The sheet bitmap is `ARGB_8888` with `Bitmap.DENSITY_NONE`. `drawImage` uses that bitmap's pixel size and `FilterQuality.None`.
+- The view is the frame's own `widthHz`. A base with `HW_CAP_ZOOM` already puts the zoomed span in that field (`wf_span()` = `SPAN_HZ / zoom`, `SPAN_HZ` = 100000), still 1024 bins. Dividing by `state.zoom` again would zoom those bases twice. A base without the cap does not decimate the waterfall IQ (`feed` pushes the full-rate samples into the waterfall; the local decimator is only on the spectrum FFT) and the snapshot width stays 100 kHz. The radio's zoomed picture on that base is a display crop in `row_pixels` / `shown_span`. The phone shows the frame's span and does not crop a second time.
+
+Before and after, for 1024 incoming bins:
+
+| | Before | After |
+|---|---|---|
+| ~2400 px wide (landscape) | ~2.3 px/bin, each bin a ramp into the next | ~2.3 px/bin, each bin a flat run of 2 or 3 px |
+| ~1080 px wide | ~1.05 px/bin, blended | ~1.05 px/bin, nearest; a pixel that covers two bins keeps the louder |
+| under 1024 px | the centre sample drops bins | max-hold of the bins in the pixel |
+| rows | cap 480 (~32 s at 15 fps); stretched while filling | the pane's pixel height, cap 4096. A 900 px waterfall is 900 lines (~60 s at 15 fps) once filled; the rest is floor colour until then |
+| zoom 8, `HW_CAP_ZOOM` | 12.5 kHz span, ~12.2 Hz/bin, blended across the pane | the same bins, flat |
+| colour | 256-entry LUT, `ARGB_8888` | the same. No dither |
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 227 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+## Firmware findings (waterfall bins and rate)
+
+Guru-RF/OpenX6X00 `main` at `9c11903215b7c0794cd6d263d917cdf24d970524`. No upstream pull request and no issue. The Panel socket cannot be asked for more bins, wider samples, or a higher rate, so the app does not send a new command.
+
+`src/radio.h` `#define RADIO_SAMPLES (512)`. `src/dsp.h` `#define WATERFALL_NFFT (RADIO_SAMPLES * 2)`, so 1024. `SPECTRUM_NFFT` is `BOARD_DISP_W` and is the on-screen spectrum FFT, not the socket.
+
+`dsp.cpp` `Panorama` is built at `WATERFALL_NFFT`. `waterfall_frame` calls `take`, converts to dB, and `frame_out` copies `wf_db` into `snap_db` before `waterfall_data`. `dsp_spectrum_snapshot` copies `min(n, WATERFALL_NFFT)` floats and returns false when `n` is larger, so asking for fewer bins copies the first bins, not a bigger FFT.
+
+`remote_server.c` `panel_thread` (the spectrum block) always calls `dsp_spectrum_snapshot(db, WATERFALL_NFFT, ...)`, quantises with `lroundf` into `int8_t` clamped to −128..127, and sends the 16-byte header `{u16 0xFFFF, u16 n, u32 centre, u32 width, u32 seq}` plus `n` bytes. `n` is `WATERFALL_NFFT`. A frame is skipped while `out_len >= PANEL_ROOM` (16 KB). No panel command sets the size or the rate.
+
+`wf_frame_ms()`: speeds 1–3 are `FRAME_MS` (`1000/15`), speed 4 is 20 Hz, speed 5 is 30 Hz, from `p_waterfall_speed` on the radio, not from a panel command. `panel_thread` sends every new snapshot, so the socket already follows that rate. `waterfall_data` then averages 3 or 2 of those frames into one on-screen line at speeds 1 and 2. That average is after the snapshot copy, so the phone already gets the pre-average frames (15 Hz at the default), not the radio's 5 lines/s slow scroll.
+
+`row_pixels` in `waterfall_view.c` blends neighbouring bins at 1/8-bin steps for the radio's screen. The phone does not copy that blend.
+
+Bandwidth of the payload (16-byte header + bins), before WebSocket framing:
+
+- 1024 int8 at 15 fps: 1040 bytes × 15 ≈ 15.6 KB/s (~125 kbit/s).
+- 2048 int8 at 15 fps: ≈ 31 KB/s (~248 kbit/s).
+- 4096 int8 at 15 fps: ≈ 62 KB/s (~493 kbit/s).
+- Speed 5 is 30 fps, so those figures double. 4096 int8 at 30 fps is ≈ 123 KB/s.
+- int16 doubles the sample bytes. 1024 int16 at 15 fps is about the same as 2048 int8 (~31 KB/s) and adds no frequency bins.
+
+`PANEL_ROOM` is 16 KB. A 4096-byte frame still fits, and about three can sit in the queue before one is skipped.
+
+A firmware change for 2048 or 4096 bins, which was not made:
+
+- Raise `WATERFALL_NFFT` in `dsp.h` (it is `RADIO_SAMPLES * 2`; `RADIO_SAMPLES` is also the IQ block). `Panorama`, `snap_db`, `wf_lin`, `wf_db` in `dsp.cpp`, the `db[]` and `bins[]` arrays in `panel_thread`, and `ROW_BINS` (`WATERFALL_NFFT * 2`) in `waterfall_view.c` all follow that size.
+- The header's `u16 n` already holds 2048 and 4096. The app paints `db.size`, so a future 2048 int8 frame would display with no app protocol change.
+- CPU: once the window is full, `Panorama::push` runs one FFT of the last N complex samples on every IQ push. Cost is about N log N, so 2048 is a little over twice the current FFT and 4096 a little over four times, and the window has to be that many samples.
+
+int16, which was not added: the float dB already exists in `snap_db`. `panel_thread` is what narrows it to int8. The header has no sample-size field, so int16 bytes would be read as twice as many int8 bins. It needs a new mark or a width field, and a parser change. The 256-entry table already has about five steps per decibel, so the visible limit is the bin count, not the 1 dB step.
+
+Time smear the app cannot undo: `Panorama::take` returns the mean of every overlapping FFT since the last line. At a 100 kHz span and 512-sample pushes that is on the order of one FFT per push, many of them averaged into each 66 ms line. Sending every FFT would be on the order of 200 KB/s. Keeping only the latest FFT in `take()` would sharpen each line without raising the byte rate, and the line would be noisier.
+
+X6200 (`HW_CAP_PSD`): `dsp_psd` linearly stretches the base's bins onto `WATERFALL_NFFT` before the snapshot, so the socket is still 1024 int8 even when the base packet is wider. Passing the base's own count through would be a change in `dsp_psd` / `frame_out` and in the fixed `snap_db` size, not only in `panel_thread`.
+
+Zoom on the wire: with `HW_CAP_ZOOM`, `wf_span()` is `SPAN_HZ / zoom` because the base decimates the IQ, and the snapshot width is that span at 1024 bins (zoom 8 is 12.5 kHz, about 12.2 Hz/bin). Without the cap, `wf_span()` stays `SPAN_HZ` (100 kHz) and the waterfall FFT is not decimated. The radio crops that picture in `shown_span`. The phone shows `frame.widthHz`.

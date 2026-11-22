@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The waterfall's colours, the pixel-to-bin interpolation, and the level glide. These are the
-// pieces that used to turn a 1024-bin FFT into a blocky, shimmering bitmap.
+// The waterfall's colours, the crisp bin mapping, and the level glide. Linear sampling and a
+// stretched history used to soften a 1024-bin FFT across the pane.
 
 package radio.kd0cq.x6100.ui.face
 
@@ -55,7 +55,7 @@ class WaterfallDisplayTest {
     }
 
     @Test
-    fun pixelsInterpolateBetweenBinsInsteadOfStepping() {
+    fun pixelsCopyTheBinUnderThemInsteadOfBlending() {
         val db = byteArrayOf(0, 100)
         val mid = WaterfallDisplay.sampleBin(db, 0.5f)
         assertEquals(50f, mid!!, 0.01f)
@@ -70,7 +70,7 @@ class WaterfallDisplayTest {
         assertEquals(5f, WaterfallDisplay.binAtHz(1000f, 1000, 1000, 10), 0.01f)
         assertEquals(10f, WaterfallDisplay.binAtHz(1500f, 1000, 1000, 10), 0.01f)
 
-        // A pixel in the middle of a two-bin row is between the bins, not a copy of one of them.
+        // Two bins across eight pixels. Each bin is a flat run, not a ramp between them.
         val colors = IntArray(256) { index -> index }
         val left = WaterfallDisplay.colorAt(
             db = db,
@@ -84,8 +84,7 @@ class WaterfallDisplayTest {
             ceiling = 100,
             colors = colors,
         )
-        // Pixel 3 of 8 sits between the two bins. Pixel 4 is already on the last bin.
-        val center = WaterfallDisplay.colorAt(
+        val stillLeft = WaterfallDisplay.colorAt(
             db = db,
             rowCentreHz = 1000,
             rowWidthHz = 1000,
@@ -97,7 +96,24 @@ class WaterfallDisplayTest {
             ceiling = 100,
             colors = colors,
         )
-        assertTrue(center in (left + 1)..254)
+        val right = WaterfallDisplay.colorAt(
+            db = db,
+            rowCentreHz = 1000,
+            rowWidthHz = 1000,
+            viewCentreHz = 1000,
+            viewWidthHz = 1000,
+            pixel = 4,
+            pixels = 8,
+            floor = 0,
+            ceiling = 100,
+            colors = colors,
+        )
+        assertEquals(left, stillLeft)
+        assertTrue(right > left)
+        assertEquals(
+            right,
+            WaterfallDisplay.colorAt(db, 1000, 1000, 1000, 1000, 7, 8, 0, 100, colors),
+        )
         // The same bins, drawn while the view has moved on, do not paint the old edge across the new span.
         val shifted = WaterfallDisplay.colorAt(
             db = db,
@@ -112,6 +128,49 @@ class WaterfallDisplayTest {
             colors = colors,
         )
         assertEquals(0, shifted)
+    }
+
+    @Test
+    fun aPixelThatCoversSeveralBinsKeepsTheLoudest() {
+        // Eight bins into two pixels. The carrier sits off the pixel centre. A sample at the
+        // centre would read the quiet neighbour; the pixel keeps the carrier.
+        val db = byteArrayOf(1, 90, 2, 3, 4, 5, 6, 7)
+        val colors = IntArray(256) { it }
+        val left = WaterfallDisplay.crispDb(db, 1000, 1000, 1000, 1000, pixel = 0, pixels = 2)
+        val right = WaterfallDisplay.crispDb(db, 1000, 1000, 1000, 1000, pixel = 1, pixels = 2)
+        assertEquals(90f, left!!, 0.01f)
+        assertEquals(7f, right!!, 0.01f)
+        assertEquals(
+            WaterfallDisplay.paletteIndex(90f, 0, 100),
+            WaterfallDisplay.colorAt(db, 1000, 1000, 1000, 1000, 0, 2, 0, 100, colors),
+        )
+    }
+
+    @Test
+    fun zoomShowsTheBinsInsideTheNarrowerSpan() {
+        // A 100 kHz row of 8 bins. The zoomed span is narrower than one bin and sits on the
+        // carrier, so every pixel of the pane is that bin. The neighbours do not blend in.
+        val db = byteArrayOf(0, 0, 0, 10, 80, 0, 0, 0)
+        val wide = 100_000
+        val binHz = wide / db.size
+        val carrierHz = 14_000_000 - wide / 2 + binHz / 2 + 4 * binHz
+        val colours = (0 until 8).map { pixel ->
+            WaterfallDisplay.crispDb(
+                db,
+                rowCentreHz = 14_000_000,
+                rowWidthHz = wide,
+                viewCentreHz = carrierHz,
+                viewWidthHz = binHz / 2,
+                pixel = pixel,
+                pixels = 8,
+            )
+        }
+        assertTrue(colours.all { it == 80f })
+        // The same row at zoom 1: the quiet bin beside the carrier stays itself, not a mix.
+        val beside = WaterfallDisplay.crispDb(db, 14_000_000, wide, 14_000_000, wide, pixel = 3, pixels = 8)
+        assertEquals(10f, beside!!, 0.01f)
+        val carrier = WaterfallDisplay.crispDb(db, 14_000_000, wide, 14_000_000, wide, pixel = 4, pixels = 8)
+        assertEquals(80f, carrier!!, 0.01f)
     }
 
     @Test
@@ -174,6 +233,10 @@ class WaterfallDisplayTest {
         assertEquals(5, history.snapshot()[0].db[0].toInt())
         history.resize(WaterfallDisplay.MAX_ROWS + 40)
         assertEquals(WaterfallDisplay.MAX_ROWS, history.capacity)
+        // The radio's screen is 480 lines. A phone pane taller than that still gets a line per pixel.
+        assertTrue(WaterfallDisplay.MAX_ROWS > 480)
+        val tall = SpectrumHistory(2000)
+        assertEquals(2000, tall.capacity)
 
         val marks = RadioFace.sMeterMarks()
         assertEquals("S1", marks.first().second)
@@ -191,19 +254,17 @@ class WaterfallDisplayTest {
     }
 
     @Test
-    fun shortHistoryFillsThePaneAndAFullHistoryIsOneRowPerPixel() {
-        // A 1:1 map left the bottom of a tall pane at the darkest stop until a row existed for
-        // every pixel. Stretching the rows that have arrived covers every y, and a history as
-        // tall as the pane goes back to one row per pixel.
+    fun aLineIsOnePixelAndAShortHistoryDoesNotStretch() {
         assertEquals(0, WaterfallDisplay.historyRowAt(0, 10, 10))
         assertEquals(9, WaterfallDisplay.historyRowAt(9, 10, 10))
+        // Two lines on a ten-pixel pane occupy the first two pixels. The rest are empty.
         assertEquals(0, WaterfallDisplay.historyRowAt(0, 10, 2))
-        assertEquals(1, WaterfallDisplay.historyRowAt(5, 10, 2))
-        assertEquals(1, WaterfallDisplay.historyRowAt(9, 10, 2))
-        val covered = (0 until 10).map { WaterfallDisplay.historyRowAt(it, 10, 2) }.toSet()
-        assertEquals(setOf(0, 1), covered)
+        assertEquals(1, WaterfallDisplay.historyRowAt(1, 10, 2))
+        assertEquals(-1, WaterfallDisplay.historyRowAt(2, 10, 2))
+        assertEquals(-1, WaterfallDisplay.historyRowAt(9, 10, 2))
+        // More lines than pixels: the newest pixels of them, still one each.
         assertEquals(9, WaterfallDisplay.historyRowAt(9, 10, 20))
-        assertEquals(0, WaterfallDisplay.historyRowAt(0, 0, 4))
-        assertEquals(0, WaterfallDisplay.historyRowAt(3, 10, 0))
+        assertEquals(-1, WaterfallDisplay.historyRowAt(0, 0, 4))
+        assertEquals(-1, WaterfallDisplay.historyRowAt(3, 10, 0))
     }
 }
