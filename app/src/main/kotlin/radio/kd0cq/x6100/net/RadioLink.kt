@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import radio.kd0cq.x6100.core.PairingController
+import radio.kd0cq.x6100.digital.Js8Protocol
+import radio.kd0cq.x6100.digital.Js8Row
+import radio.kd0cq.x6100.digital.Js8Status
 
 /** One connection to one radio: where it came from, and where its two servers answered. */
 data class RadioConnection(
@@ -106,6 +109,34 @@ class RadioLink(
     private val _ft8Status = MutableStateFlow<Ft8Status?>(null)
     val ft8Status: StateFlow<Ft8Status?> = _ft8Status.asStateFlow()
 
+    private val _js8Rows = MutableStateFlow<List<Js8Row>>(emptyList())
+
+    /**
+     * Decoded JS8 messages, oldest first. A line whose id is already here replaces
+     * that row, because the radio rewrites a message while it is still arriving.
+     * The last [JS8_ROWS_KEPT] are what a new connection is replayed.
+     */
+    val js8Rows: StateFlow<List<Js8Row>> = _js8Rows.asStateFlow()
+
+    private val _js8Status = MutableStateFlow<Js8Status?>(null)
+
+    /** The JS8 app's switches, offsets and note. Null until the radio has sent a `js8` line. */
+    val js8Status: StateFlow<Js8Status?> = _js8Status.asStateFlow()
+
+    private val _js8Waterfall = MutableStateFlow<List<AppWaterfallFrame>>(emptyList())
+
+    /** App-waterfall lines, oldest first, while the JS8 screen has asked for them. */
+    val js8Waterfall: StateFlow<List<AppWaterfallFrame>> = _js8Waterfall.asStateFlow()
+
+    private val _js8NeedsFirmware = MutableStateFlow(false)
+
+    /**
+     * True after the radio answers "err unknown command js8". A later `js8` or
+     * `js8r` line clears it: that radio has the command. A refusal of one send
+     * ("err js8 send: ...") does not set it.
+     */
+    val js8NeedsFirmware: StateFlow<Boolean> = _js8NeedsFirmware.asStateFlow()
+
     private val _cwLines = MutableStateFlow<List<String>>(emptyList())
 
     /**
@@ -187,6 +218,7 @@ class RadioLink(
     init {
         collectPanel()
         collectFrames()
+        collectAppFrames()
         collectTci()
         watchPhases()
     }
@@ -276,16 +308,27 @@ class RadioLink(
                     is PanelEvent.Spots -> _spots.value = event.spots
                     is PanelEvent.DecodedFt8Row -> _ft8Rows.value = (_ft8Rows.value + event.row).takeLast(FT8_ROWS_KEPT)
                     is PanelEvent.Ft8 -> _ft8Status.value = event.status
+                    is PanelEvent.DecodedJs8 -> {
+                        _js8Rows.value = Js8Protocol.upsert(_js8Rows.value, event.row, JS8_ROWS_KEPT)
+                        _js8NeedsFirmware.value = false
+                    }
+                    is PanelEvent.Js8 -> {
+                        _js8Status.value = event.status
+                        _js8NeedsFirmware.value = false
+                    }
                     is PanelEvent.Cw -> _cwLines.value = (_cwLines.value + event.text).takeLast(CW_LINES_KEPT)
                     is PanelEvent.Logged -> _receipts.value = (_receipts.value + event.receipt).takeLast(RECEIPTS_KEPT)
                     is PanelEvent.Sessions -> _sessions.value = event.sessions
-                    is PanelEvent.Spectrum, is PanelEvent.Screen -> Unit
+                    is PanelEvent.Spectrum, is PanelEvent.Screen, is PanelEvent.AppWaterfall -> Unit
                     is PanelEvent.Paired -> {
                         _lastAnswer.value = "paired as ${event.role.wire}"
                         _role.value = RoleInfo(event.role, event.txAllowed, _role.value.sessionName)
                     }
 
-                    is PanelEvent.Failure -> _lastAnswer.value = event.text
+                    is PanelEvent.Failure -> {
+                        _lastAnswer.value = event.text
+                        if (Js8Protocol.needsNewerFirmware(event.text)) _js8NeedsFirmware.value = true
+                    }
                     is PanelEvent.Notice -> _lastAnswer.value = event.text
                     is PanelEvent.Pong -> Unit
                 }
@@ -306,6 +349,17 @@ class RadioLink(
                     is PanelEvent.Spectrum -> _spectrum.value = event.frame
                     is PanelEvent.Screen -> _screen.value = event.frame
                     else -> Unit
+                }
+            }
+        }
+    }
+
+    /** The JS8 waterfall's own lane. A spectrum frame never replaces one of these. */
+    private fun collectAppFrames() {
+        scope.launch {
+            panel.appFrames.collect { event ->
+                if (event is PanelEvent.AppWaterfall) {
+                    _js8Waterfall.value = (_js8Waterfall.value + event.frame).takeLast(JS8_WF_ROWS)
                 }
             }
         }
@@ -337,6 +391,8 @@ class RadioLink(
 
     private companion object {
         const val FT8_ROWS_KEPT = 48
+        const val JS8_ROWS_KEPT = Js8Protocol.ROWS_KEPT
+        const val JS8_WF_ROWS = 96
         const val CW_LINES_KEPT = 64
         const val RECEIPTS_KEPT = 20
     }

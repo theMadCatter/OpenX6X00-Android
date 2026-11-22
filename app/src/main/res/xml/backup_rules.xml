@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What a reinstall may restore, on Android 11 and earlier.
+  The last host lives in radio_face and is included with the rest of that file.
+  The pairing token and the QRZ password are excluded. They are not a convenience
+  setting, and a restore must not bring them back onto a phone that was unpaired.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="radio_link.xml" />
+    <exclude domain="sharedpref" path="qrz_secrets.xml" />
+    <exclude domain="database" path="qso-log.db" />
+    <exclude domain="database" path="qso-log.db-shm" />
+    <exclude domain="database" path="qso-log.db-wal" />
+</full-backup-content>

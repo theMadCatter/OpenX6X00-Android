@@ -503,11 +503,13 @@ class RadioFaceTest {
             "split", "rit", "xit", "comp", "if shift", "vox", "monitor", "dnf",
             "nb level", "nr level", "cw keyer speed", "cw keyer tone", "iambic", "qsk", "ratio",
             "zap", "cw peak", "cw trainer", "swr scan", "rx recorder", "field ops", "gps",
-            "birdie cal", "memories", "js8", "psk", "rtty", "olivia", "sstv", "wspr",
+            "birdie cal", "memories", "psk", "rtty", "olivia", "sstv", "wspr",
         ).forEach { needed ->
             assertTrue("missing placeholder for $needed", names.any { needed in it })
         }
         assertTrue(RadioFace.pendingFeatures().all { it.note == PENDING_FIRMWARE })
+        // JS8 is a real screen now. It must not stay in the grey pending list.
+        assertTrue(names.none { it == "js8" })
     }
 
     private fun sample(): RadioState = RadioState(

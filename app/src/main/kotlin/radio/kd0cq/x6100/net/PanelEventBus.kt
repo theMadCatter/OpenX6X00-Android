@@ -53,12 +53,22 @@ class PanelEventBus(scope: CoroutineScope) {
         replay = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+    private val appPictures = MutableSharedFlow<PanelEvent>(
+        replay = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 
     /** Control, state, role, errors, and every other text line. Never dropped for a frame. */
     val events: Flow<PanelEvent> = text.asSharedFlow()
 
     /** The latest spectrum or screen frame. Older frames are replaced, not queued. */
     val frames: Flow<PanelEvent> = pictures.asSharedFlow()
+
+    /**
+     * The latest JS8 or FT8 app-waterfall line. Its own slot, so it neither evicts a
+     * spectrum frame nor waits behind one, and neither of them can push `ctl` out.
+     */
+    val appFrames: Flow<PanelEvent> = appPictures.asSharedFlow()
 
     private val queued = AtomicLong(0)
 
@@ -116,6 +126,7 @@ class PanelEventBus(scope: CoroutineScope) {
         if (generation != epoch.get()) return
         when (event) {
             is PanelEvent.Spectrum, is PanelEvent.Screen -> pictures.tryEmit(event)
+            is PanelEvent.AppWaterfall -> appPictures.tryEmit(event)
             else -> enqueue(generation, event)
         }
     }
