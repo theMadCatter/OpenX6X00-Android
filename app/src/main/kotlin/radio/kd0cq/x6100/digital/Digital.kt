@@ -16,15 +16,18 @@
 // not a command. The screen asks before Send and CQ, and it does not call
 // any transmit word from composition.
 //
-// The colours and the row text below are the night values from the radio's
-// own LVGL screens (src/js8_window.c, src/ft8/decode_list.c, src/theme.h).
-// This file still does not open a socket and does not key PTT.
+// The colours and the row text below are the night values from each mode's
+// own LVGL screen (src/js8_window.c, src/ft8_window.c, src/ft8/decode_list.c,
+// src/wefax_window.c, src/text_panel.cpp, src/theme.h). JS8's split is not
+// the layout of the others. This file still does not open a socket and does
+// not key PTT.
 
 package radio.kd0cq.x6100.digital
 
 import org.json.JSONObject
 import radio.kd0cq.x6100.log.Qso
 import radio.kd0cq.x6100.log.QsoBook
+import radio.kd0cq.x6100.net.Ft8Row
 
 object Ft8List {
     /** Milliseconds left in the slot. The radio's own in/slot win. Otherwise a 15 s UTC period. */
@@ -569,11 +572,30 @@ object Js8Look {
  */
 object Ft8Look {
     const val TO_ME = 0xFFEF4444.toInt()
+
+    /** A tile that is calling us uses theme `row_to_me`. The list row uses `ft8_to_me`. */
+    const val ROW_TO_ME = 0xFF991B1B.toInt()
     const val TX = 0xFF0082FC.toInt()
     const val CQ_EDGE = 0xFF34D399.toInt()
     const val PANEL = 0xFF13161D.toInt()
+    const val ROW = 0xFF1B1F29.toInt()
     const val TEXT = 0xFFF1F5F9.toInt()
     const val MUTE = 0xFF64748B.toInt()
+    const val WARN = 0xFFFBBF24.toInt()
+    const val ERR = 0xFFF87171.toInt()
+    const val CHIP = 0xFF1B1F29.toInt()
+    const val LINE = 0xFF94A3B8.toInt()
+    const val OK = 0xFF34D399.toInt()
+
+    /**
+     * decode_list.c paints every row at opacity 115 so the waterfall under
+     * the list stays visible. 255 would hide that waterfall.
+     */
+    const val LIST_ALPHA = 115f / 255f
+
+    /** ft8_window.c: the calls' strip, then this many pixels of waterfall clear of the list. */
+    const val LANE_PX = 26
+    const val PEEK_PX = 40
 
     const val CELL_INFO = 0
     const val CELL_START = 1
@@ -644,6 +666,119 @@ object Ft8Look {
             }
         }
     }
+
+    /**
+     * Show: All keeps every row. Show: CQ drops the other stations' QSOs
+     * (CELL_RX_MSG). Slot lines, calls to us, CQ and our own TX stay, which
+     * is what "leaves the other QSOs out" means for the rows the socket has.
+     */
+    fun showKeeps(cellType: Int, showAll: Boolean): Boolean = showAll || cellType != CELL_MSG
+
+    /** Their signal as the tile draws it: −24 dB is one bar, −4 dB is five. */
+    fun signalBars(snrDb: Int): Int = ((snrDb + 29) / 5).coerceIn(0, 5)
+
+    /**
+     * The lane's ink. Yellow is our TX and the tile that is selected. Red is
+     * a station calling us. White is a CQ. The rest is the muted text.
+     */
+    fun laneInk(toMe: Boolean, cq: Boolean, selected: Boolean): Int = when {
+        selected -> WARN
+        toMe -> ERR
+        cq -> TEXT
+        else -> MUTE
+    }
+}
+
+/**
+ * One station on the FT8 lane and on the tiles, taken from the newest row
+ * for that call. The radio builds the same board from the decoder, not from
+ * a second socket.
+ */
+data class Ft8Heard(
+    val call: String,
+    val freqHz: Int,
+    val snrDb: Int,
+    val country: String,
+    val distanceKm: Int,
+    val cellType: Int,
+    val workedType: Int,
+    val pota: Int,
+    val toMe: Boolean,
+    val id: Long,
+)
+
+/**
+ * Newest row per call, calls to us first, then CQs, then the rest. Within a
+ * group the station heard later comes first. Info rows and our own TX have
+ * no station on the lane.
+ */
+fun ft8Heard(rows: List<Ft8Row>, showAll: Boolean): List<Ft8Heard> {
+    val byCall = LinkedHashMap<String, Pair<Int, Ft8Heard>>()
+    var order = 0
+    for (row in rows) {
+        if (!Ft8Look.showKeeps(row.cellType, showAll)) continue
+        if (row.call.isEmpty()) continue
+        if (row.cellType == Ft8Look.CELL_INFO || row.cellType == Ft8Look.CELL_START || row.cellType == Ft8Look.CELL_TX) {
+            continue
+        }
+        byCall[row.call.uppercase()] = order++ to Ft8Heard(
+            call = row.call,
+            freqHz = row.freqHz,
+            snrDb = row.snrDb,
+            country = row.country,
+            distanceKm = row.distanceKm,
+            cellType = row.cellType,
+            workedType = row.workedType,
+            pota = row.pota,
+            toMe = row.toMe || row.cellType == Ft8Look.CELL_TO_ME,
+            id = row.id,
+        )
+    }
+    return byCall.values.sortedWith(
+        compareByDescending<Pair<Int, Ft8Heard>> { it.second.toMe }
+            .thenByDescending { it.second.cellType == Ft8Look.CELL_CQ }
+            .thenByDescending { it.first },
+    ).map { it.second }
+}
+
+/**
+ * The five button pages of ft8_window.c, in that file's order. A null slot
+ * is a button the radio leaves empty. Only [ft8KeySends] is a panel word.
+ * Show and View change this screen. The rest are on the radio and are not
+ * dispatched by remote_server.c, so a press must not invent a command.
+ */
+enum class Ft8Key {
+    PAGE, CQ, TX_CALL, SHOW, VIEW,
+    AUTO, HOLD, RETRIES, FORCE_SAVE,
+    MODE, FREQ, HOUND, POWER,
+    CQ_MOD, TIME_SYNC, LIVE_MAP, TUNE,
+    LOG_MAP, FOR_YOU,
+}
+
+fun ft8Page(index: Int): List<Ft8Key?> = when (Math.floorMod(index, 5)) {
+    0 -> listOf(Ft8Key.PAGE, Ft8Key.CQ, Ft8Key.TX_CALL, Ft8Key.SHOW, Ft8Key.VIEW)
+    1 -> listOf(Ft8Key.PAGE, Ft8Key.AUTO, Ft8Key.HOLD, Ft8Key.RETRIES, Ft8Key.FORCE_SAVE)
+    2 -> listOf(Ft8Key.PAGE, Ft8Key.MODE, Ft8Key.FREQ, Ft8Key.HOUND, Ft8Key.POWER)
+    3 -> listOf(Ft8Key.PAGE, Ft8Key.CQ_MOD, Ft8Key.TIME_SYNC, Ft8Key.LIVE_MAP, Ft8Key.TUNE)
+    else -> listOf(Ft8Key.PAGE, Ft8Key.LOG_MAP, Ft8Key.FOR_YOU, null, null)
+}
+
+/** The panel words that sit on those pages: cq, txcall, auto, hold, mode. */
+fun ft8KeySends(key: Ft8Key): Boolean = when (key) {
+    Ft8Key.CQ, Ft8Key.TX_CALL, Ft8Key.AUTO, Ft8Key.HOLD, Ft8Key.MODE -> true
+    else -> false
+}
+
+/**
+ * The TX marker is a band [widthHz] wide starting at the offset. The radio
+ * clamps the offset so the band stays inside the filter, and it paints that
+ * band at half opacity. Null when the offset is outside the span.
+ */
+fun finderBand(txHz: Int, widthHz: Int, lowHz: Int, highHz: Int, widthPx: Float): Pair<Float, Float>? {
+    val start = waterfallX(txHz, lowHz, highHz, widthPx) ?: return null
+    val endHz = (txHz + widthHz).coerceAtMost(highHz)
+    val end = waterfallX(endHz, lowHz, highHz, widthPx) ?: return null
+    return start to end.coerceAtLeast(start + 1f)
 }
 
 /** One row of the FT8 list after the slot time has been lifted onto its own line. */
@@ -754,6 +889,60 @@ object WeFaxProtocol {
     }
 
     /**
+     * The app frame's left label: the station, then the frequency in kHz.
+     * wefax_window.c writes "%s   %.1f kHz". No station yet is the word WeFax.
+     */
+    fun frameLeft(status: WeFaxStatus?): String {
+        if (status == null) return "WeFax"
+        val name = status.station.ifEmpty { "WeFax" }
+        if (status.freqHz == 0) return name
+        return "$name   ${"%.1f".format(status.freqHz / 1000.0)} kHz"
+    }
+
+    /**
+     * The frame's right label. Transmit replaces the receiver state. Auto
+     * Plan adds the next slot the JSON already carries.
+     */
+    fun frameRight(status: WeFaxStatus?): String {
+        if (status == null) return "RX Auto"
+        if (status.transmitting) return "TX ${status.txPercent}%"
+        val rx = if (status.auto) "RX Auto" else "RX Cont"
+        // header_update prints "%.5s" of plan_next, which is "HH:MM station kHz".
+        if (status.plan && status.next.isNotEmpty()) {
+            val time = if (status.next.length >= 5 && status.next[2] == ':') status.next.take(5) else status.next
+            return "$rx   Plan $time"
+        }
+        return rx
+    }
+
+    /** The Plan button. Off is "Auto / Plan". On names the next slot's time. */
+    fun planButton(status: WeFaxStatus?): String {
+        if (status?.plan != true) return "Auto\nPlan"
+        val next = status.next
+        val time = if (next.length >= 5 && next[2] == ':') next.take(5) else "--:--"
+        return "Plan\nnext $time"
+    }
+
+    /**
+     * Auto, no rows yet, not transmitting: the words the radio puts over an
+     * empty chart. Null when a picture is already coming in.
+     */
+    fun idleLines(status: WeFaxStatus?, hasRows: Boolean): List<String>? {
+        if (status == null || !status.auto || hasRows || status.transmitting) return null
+        if (!status.plan) {
+            return listOf(
+                "Auto Plan is off",
+                "a fax starts by itself with its start tone",
+                "Auto Plan (F2 of page 1) takes the day's charts by itself",
+            )
+        }
+        if (status.next.isEmpty()) {
+            return listOf("No chart planned", "a fax starts by itself with its start tone", "")
+        }
+        return listOf(status.next, status.station, "")
+    }
+
+    /**
      * What the status line on the radio's frame says, from the fields the
      * JSON actually carries. The picture itself is the grey rows.
      */
@@ -798,4 +987,166 @@ private fun JSONObject.on(name: String): Boolean = when (val value = opt(name)) 
     is Boolean -> value
     is Number -> value.toInt() != 0
     else -> false
+}
+
+/**
+ * The four button pages of wefax_window.c. A null slot is empty on the radio.
+ * Bulletin, the chart browser, frequency presets, align, tilt, night and
+ * power are not panel words. Open is not on this bar: the radio opens the
+ * app by launching it, and the phone keeps Open off this page.
+ */
+enum class FaxKey {
+    PAGE, PLAN, BULLETIN, CHARTS, CLOSE,
+    FREQ, RX, VIEW, CLEAR,
+    ALIGN, TILT, SAVE, POWER, NIGHT,
+}
+
+fun faxPage(index: Int): List<FaxKey?> = when (Math.floorMod(index, 4)) {
+    0 -> listOf(FaxKey.PAGE, FaxKey.PLAN, FaxKey.BULLETIN, FaxKey.CHARTS, FaxKey.CLOSE)
+    1 -> listOf(FaxKey.PAGE, FaxKey.FREQ, FaxKey.RX, FaxKey.VIEW, FaxKey.CLEAR)
+    2 -> listOf(FaxKey.PAGE, FaxKey.ALIGN, FaxKey.TILT, FaxKey.SAVE, FaxKey.POWER)
+    else -> listOf(FaxKey.PAGE, FaxKey.NIGHT, null, null, null)
+}
+
+/** close, plan/unplan, auto/cont, clear, save. None of these keys a carrier. */
+fun faxKeySends(key: FaxKey): Boolean = when (key) {
+    FaxKey.PLAN, FaxKey.CLOSE, FaxKey.RX, FaxKey.CLEAR, FaxKey.SAVE -> true
+    else -> false
+}
+
+/**
+ * How text_panel.cpp colours a finished CW word. A call is gold only once
+ * the radio would call it confirmed: beside DE, or the same call twice.
+ * Abbreviations are the dim text. An RST is the header gold. The speed
+ * line is not here: the socket does not send WPM.
+ */
+object CwLook {
+    const val ACCENT = 0xFFE5A823.toInt()
+    const val DIM = 0xFF94A3B8.toInt()
+    const val HEAD = 0xFFE5A823.toInt()
+    const val TEXT = 0xFFF1F5F9.toInt()
+
+    enum class Kind { PLAIN, ABBR, RST, CALL }
+
+    private val tokens = setOf(
+        "CQ", "DE", "K", "KN", "BK", "AR", "SK", "R", "RR", "TU", "TNX", "TKS", "73", "88", "UR", "RST",
+        "QTH", "NAME", "NM", "OP", "RIG", "ANT", "PWR", "WX", "PSE", "AGN", "QSL", "QSO", "QRZ", "QRZ?",
+        "QRL", "QRL?", "QRM", "QRN", "QSB", "QRP", "QRS", "QRQ", "QSY", "QRT", "GM", "GA", "GE", "GN",
+        "FB", "HW", "HW?", "HR", "ES", "BT", "OM", "YL", "FER", "CALL", "CFM", "GL", "GD", "DR", "ABT",
+        "CUL", "SRI", "NR", "TEST", "POTA", "SOTA", "UP", "?", "=",
+    )
+
+    fun kind(word: String): Kind {
+        val w = word.uppercase()
+        if (w.length >= 4 && w.first() == '<' && w.last() == '>') {
+            if (w == "<ERR>") return Kind.PLAIN
+            if (w.substring(1, w.length - 1).all { it in 'A'..'Z' }) return Kind.ABBR
+        }
+        if (w in tokens) return Kind.ABBR
+        if (isRst(w)) return Kind.RST
+        if (isCall(w)) return Kind.CALL
+        return Kind.PLAIN
+    }
+
+    /**
+     * True when this call would be coloured. [at] is the index of the word
+     * in [text]. The word must be a call, and it must sit against DE or
+     * occur at least twice.
+     */
+    fun confirmed(text: String, word: String): Boolean {
+        val w = word.uppercase()
+        if (!isCall(w)) return false
+        val words = text.uppercase().split(' ', '\n').filter { it.isNotEmpty() }
+        val i = words.indexOf(w)
+        if (i < 0) return false
+        if (i > 0 && words[i - 1] == "DE") return true
+        if (i + 1 < words.size && words[i + 1] == "DE") return true
+        return words.count { it == w } >= 2
+    }
+
+    fun ink(kind: Kind, confirmed: Boolean): Int = when {
+        kind == Kind.CALL && confirmed -> ACCENT
+        kind == Kind.ABBR -> DIM
+        kind == Kind.RST -> HEAD
+        else -> TEXT
+    }
+
+    /** The last [maxLines] of the decoder, which is all the panel keeps. */
+    fun tail(text: String, maxLines: Int): String {
+        if (maxLines < 1 || text.isEmpty()) return ""
+        val lines = text.split('\n')
+        return lines.takeLast(maxLines).joinToString("\n")
+    }
+
+    /**
+     * Soft-wrap to [columns], then keep the last [maxLines]. A decoder that
+     * never sends a newline would otherwise be one line the panel cannot show.
+     */
+    fun wrappedTail(text: String, maxLines: Int, columns: Int): String {
+        if (maxLines < 1 || columns < 1 || text.isEmpty()) return ""
+        val wrapped = ArrayList<String>()
+        for (raw in text.split('\n')) {
+            if (raw.isEmpty()) {
+                wrapped += ""
+                continue
+            }
+            var i = 0
+            while (i < raw.length) {
+                val end = (i + columns).coerceAtMost(raw.length)
+                var cut = end
+                if (end < raw.length) {
+                    val space = raw.lastIndexOf(' ', end - 1)
+                    if (space > i) cut = space + 1
+                }
+                wrapped += raw.substring(i, cut).trimEnd()
+                i = if (cut == i) i + 1 else cut
+            }
+        }
+        return wrapped.takeLast(maxLines).joinToString("\n")
+    }
+
+    private fun isRst(w: String): Boolean {
+        if (w.length != 3 || w[0] !in '1'..'5') return false
+        return w.drop(1).all { it == 'N' || it in '1'..'9' }
+    }
+
+    /** Prefix, one digit, 1–4 letters, with the same optional /P and prefix forms as cw_parse.c. */
+    private fun isCall(w: String): Boolean {
+        if (w.length !in 3..14) return false
+        val slash = w.indexOf('/')
+        if (slash < 0) return core(w)
+        val second = w.indexOf('/', slash + 1)
+        if (second >= 0) {
+            return prefix(w.substring(0, slash)) &&
+                core(w.substring(slash + 1, second)) &&
+                postfix(w.substring(second + 1))
+        }
+        val left = w.substring(0, slash)
+        val right = w.substring(slash + 1)
+        return (postfix(right) && core(left)) || (prefix(left) && core(right))
+    }
+
+    private fun core(s: String): Boolean {
+        var suf = 0
+        while (suf < s.length && s[s.length - 1 - suf] in 'A'..'Z') suf++
+        if (suf !in 1..4 || suf + 2 > s.length) return false
+        if (!s[s.length - suf - 1].isDigit()) return false
+        val pl = s.length - suf - 1
+        val p = s.substring(0, pl)
+        return (pl == 1 && p[0] in 'A'..'Z') ||
+            (pl == 2 && p[0] in 'A'..'Z' && (p[1] in 'A'..'Z' || p[1].isDigit())) ||
+            (pl == 2 && p[0].isDigit() && p[1] in 'A'..'Z') ||
+            (pl == 3 && p[0].isDigit() && p[1] in 'A'..'Z' && p[2] in 'A'..'Z')
+    }
+
+    private fun prefix(s: String): Boolean {
+        if (s.length !in 1..4) return false
+        if (s.any { it !in 'A'..'Z' && !it.isDigit() }) return false
+        return s.any { it in 'A'..'Z' }
+    }
+
+    private fun postfix(s: String): Boolean = when (s) {
+        "P", "M", "MM", "AM", "QRP" -> true
+        else -> s.length == 1 && s[0].isDigit()
+    }
 }

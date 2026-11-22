@@ -626,3 +626,36 @@ Credit: KD0CQ. Built on a436b89. The S24 Ultra showed two layout bugs, and the J
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **240 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.
+
+## Each digital mode uses its own radio window
+
+Credit: KD0CQ. Clarification after 818e523: FT8, FT4 and the other non-JS8 modes must follow their own firmware screens. The JS8 split is not their layout.
+
+**What I found**
+
+1. `DigitalSplit` was written as the phone's waterfall-over-a-list, and FT8 and WeFax both called it. That split is `src/js8_window.c`: a short waterfall, then the list, then the controls, and in landscape the waterfall beside the list. `src/ft8_window.c` is a different picture. `src/wefax_window.c` is the common app frame. Reusing the JS8 composable made the other modes look like JS8.
+
+2. The CW screen was matched to `src/cw_field.c`. That file is the keyboard field: one line being keyed, and the keyer speed beside it. The decoder's display is `src/text_panel.cpp` (declared in `src/text_panel.h`). `src/cw_decoder.c` writes the socket line and then `panel_add_text`. The panel keeps the last lines that fit, colours a confirmed call, an abbreviation and an RST, and puts the speed on an info line above the panel. The `cw` line is the text only.
+
+3. FT4 and FT2 are still not their own sockets. `cfg_ft8_protocol` is 0 FT4, 1 FT8, 2 FT2, and `ft8 mode` cycles them inside the one FT8 window.
+
+**What changed**
+
+- JS8 still uses `DigitalSplit` and `AppWaterfallPicture`. FT8, WeFax and CW do not.
+- FT8, in both orientations, is the radio's column. A 26 px lane of calls sits on the panel colour. The waterfall is the Gauss table, 0 to 30 dB, and the finder is a band of the signal width starting at the TX offset (`set_tx_freq_in_filter` keeps the whole signal in the filter). The list is see-through at opacity 115 over the waterfall, with 40 px of the waterfall left clear above it. A CQ keeps the green edge. A call to us is `#EF4444`. Our TX is `#0082FC`. A slot time is a centred line with a rule on each side. View swaps that list for the 3×3 tiles. A tile that is calling us uses `#991B1B` (`row_to_me`), five signal bars from −24 dB to −4 dB, and the tag. A sideways drag is the main knob: 10 Hz per 24 dp, `ft8 txfreq`, and the list fades for one second. It needs Take control and does not run the band-edge check. The five button pages follow `ft8_window.c` in order. CQ, TX Call and Auto still ask, and turning one on still needs the US Advanced check (83 Hz FT4, 50 Hz FT8, 167 Hz FT2). Turning one off uses the same command, still asks, and skips the band check so a bad offset cannot leave the transmitter on. Hold and Mode send. Show and View are local. Freq, Retries, Force QSO save, Hound, Power, CQ modifier, Time sync, Live Map, Tune, Log Map and For you are drawn and send nothing. Open, Close, Stop and Take control stay in a thin row because the panel requires them and they are not F-keys. Opening the screen still sends only `ft8 wf`. There is no JS8 button on this screen.
+- WeFax is the app frame. The left names the station and the frequency. The right is RX Auto or RX Cont, TX percent while transmitting, or Plan plus the next slot's `HH:MM`. The hint under the frame is the radio's page hint. The chart is the grey rows, newest at the bottom. View cycles Big, Full, Small. Small is the 152 px strip; the radio shows its main waterfall above that strip, and this route has no waterfall, so the frame colour fills that space. The four pages of five buttons follow `wefax_window.c`. Plan, Close, RX mode, Clear and Save send `plan`/`unplan`, `close`, `auto`/`cont`, `clear` and `save`, each through operate and Take control. None of them is a carrier. Bulletin, All Charts, Freq, Align, Tilt, Power and Night are drawn and send nothing. View is local. Open stays off that bar. The screen still asks for `wefax rows 1` and does not send `wefax open`.
+- CW is the text panel: the panel background, a border, the last lines that fit at 24 sp, and a word coloured the way `src/cw_parse.c` classifies it once the words are already separated. A confirmed call (beside DE, or the same call twice) is `#E5A823`. An abbreviation is `#94A3B8`. An RST is the header gold. The info line says the speed is not in the `cw` text, and no WPM is invented. There is still no command. Opening the screen does not start the decoder. The spectrum still does not paint the line.
+
+**What could not be matched**
+
+- Country flags are LVGL images. The FT8 "NEW" tag and "called you" need the radio's worked state, which `ft8r` does not carry. Worked, CQ, POTA, SNR, distance and country are on the line and are shown.
+- The Directed view's offset threshold, the JS8 UTC clock and the drift are still absent from the `js8` JSON.
+- CW WPM, the RTTY tuning scope in the corner of the same panel, and dimming the text while the dial is moving are not on the socket. `cw_parse_split` (a run of words with no spaces) and the radio's known-call table are not ported. A call is coloured only when the decoder already separated the words.
+- WeFax tilt, align, night, the bulletin, the chart browser and the frequency presets are on the radio and are not panel commands, so those buttons do not send. The idle overlay's product name, "in N min" and the two following slots come from the radio's plan table. The JSON has one `next` string, and that string is what the overlay shows.
+- PSK, RTTY, Olivia, SSTV, WSPR and Navtex still have no panel or TCI stream. No screen was added for them.
+
+`eachDigitalModeKeepsItsOwnWindow` locks the FT8 and WeFax page order, which keys send, the CQ filter, the heard-list order, the signal bars, the finder band, the fax frame text and the CW word colours.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **241 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.
