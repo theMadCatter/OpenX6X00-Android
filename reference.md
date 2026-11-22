@@ -506,3 +506,15 @@ Time smear the app cannot undo: `Panorama::take` returns the mean of every overl
 X6200 (`HW_CAP_PSD`): `dsp_psd` linearly stretches the base's bins onto `WATERFALL_NFFT` before the snapshot, so the socket is still 1024 int8 even when the base packet is wider. Passing the base's own count through would be a change in `dsp_psd` / `frame_out` and in the fixed `snap_db` size, not only in `panel_thread`.
 
 Zoom on the wire: with `HW_CAP_ZOOM`, `wf_span()` is `SPAN_HZ / zoom` because the base decimates the IQ, and the snapshot width is that span at 1024 bins (zoom 8 is 12.5 kHz, about 12.2 Hz/bin). Without the cap, `wf_span()` stays `SPAN_HZ` (100 kHz) and the waterfall FFT is not decimated. The radio crops that picture in `shown_span`. The phone shows `frame.widthHz`.
+
+## Live check of a3c1afa: history across a taller pane
+
+The 1 line = 1 px time axis stayed. Growing the waterfall (rotation to landscape, or a layout that gives the waterfall more pixels) showed a thin band of new lines and an empty floor until the pane filled again, about a minute at 15 fps.
+
+Cause: the deque lived inside the spectrum pane (`remember`) and `resize` trimmed it to that pane's pixel height. A short portrait waterfall dropped every line past its height. A rotation disposed the pane, so the new one started empty even for the lines that had fit. The bitmap was then rebuilt at the new height from that short or empty deque.
+
+The ring is now `WaterfallHold` on `RadioViewModel`, the same place as the 3D `RidgeHold`. It keeps [WaterfallDisplay.MAX_ROWS] raw lines (4096) whatever the pane measures. `linesFor(pixelRows)` returns the newest lines the bitmap can show and does not drop the rest, so shrinking and growing both paint from the lines already stored. A repeated sequence (the frame still current when the pane comes back) does not scroll. The colour window travels with the ring, so the stored lines are not recoloured from the leveler's default until the tracker catches up. The bitmap remember keys include the pane width and the waterfall pixel height, so the new size repaints before the next frame.
+
+`theWaterfallHistorySurvivesATallerPane` stores 300 lines, reads 80 of them, then 900, and requires the oldest to still be there. Collecting the current sequence again leaves the count at 300. Reading 40 and then 200 still finds the same lines.
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 228 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.

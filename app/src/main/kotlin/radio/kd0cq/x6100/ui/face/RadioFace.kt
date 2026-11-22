@@ -135,9 +135,12 @@ data class SpectrumSlice(val db: ByteArray, val centreHz: Int, val widthHz: Int)
  * Scrolling waterfall rows. Newest is index 0 of [snapshot]: the line under the spectrum is the
  * frame that just arrived, and older frames move down.
  *
- * The depth is the waterfall's pixel height, not a fixed 48 and not the radio's 480-line
- * screen. A taller pane keeps a line for every pixel, so it shows more time. [resize] trims
- * to that height. The cap is [WaterfallDisplay.MAX_ROWS].
+ * The depth is fixed when the ring is created. It is [WaterfallDisplay.MAX_ROWS] on the screen,
+ * at least 4096 raw lines, and it does not follow the pane. A short waterfall used to trim the
+ * deque to its pixel height and throw away every older line, so growing the pane (landscape,
+ * or waterfall-only) had nothing to paint below the new lines. The painter asks
+ * [WaterfallHold.linesFor] for as many of these lines as the bitmap is tall and leaves the rest
+ * stored.
  */
 class SpectrumHistory(capacity: Int = WaterfallDisplay.MAX_ROWS) {
     var capacity: Int = capacity.coerceIn(1, WaterfallDisplay.MAX_ROWS)
@@ -147,18 +150,60 @@ class SpectrumHistory(capacity: Int = WaterfallDisplay.MAX_ROWS) {
 
     fun clear() = rows.clear()
 
+    fun count(): Int = rows.size
+
     fun snapshot(): List<SpectrumSlice> = rows.toList()
 
-    /** Keep [rows] lines. Extra history is dropped from the oldest end. */
-    fun resize(rows: Int) {
-        capacity = rows.coerceIn(1, WaterfallDisplay.MAX_ROWS)
-        while (this.rows.size > capacity) this.rows.removeLast()
-    }
-
     fun push(db: ByteArray, centreHz: Int, widthHz: Int): List<SpectrumSlice> {
+        // The stored line keeps its own bytes. The frame that supplied them can be replaced.
         rows.addFirst(SpectrumSlice(db.copyOf(), centreHz, widthHz))
         while (rows.size > capacity) rows.removeLast()
         return rows.toList()
+    }
+}
+
+/**
+ * The waterfall's raw lines for the life of the screen.
+ *
+ * The spectrum pane used to allocate its own deque and resize it to the bitmap. A rotation
+ * disposes that pane, and a layout change to a taller waterfall had already dropped every
+ * line past the short height, so the new bitmap was a thin band of fresh lines over an
+ * empty floor for about a minute. This holder is the ring. The bitmap is painted from
+ * [linesFor] whenever its height changes, in either direction: a shorter pane shows the
+ * newest lines, and growing it again still has the older ones.
+ *
+ * A repeated sequence is the frame still current when the pane comes back. Accepting it
+ * again would scroll a duplicate of that line and push the oldest one toward the cap.
+ */
+class WaterfallHold(capacity: Int = WaterfallDisplay.MAX_ROWS) {
+    val history = SpectrumHistory(capacity)
+
+    /**
+     * The colour window. It lives with the lines so a new pane paints the stored
+     * history in the window those lines were collected under. A leveler created
+     * with the pane would start at its default and recolour that history until
+     * the tracker caught up.
+     */
+    val leveler = WaterfallLeveler()
+    private var lastSequence = Long.MIN_VALUE
+
+    fun accept(db: ByteArray, centreHz: Int, widthHz: Int, sequence: Long) {
+        if (sequence == lastSequence) return
+        lastSequence = sequence
+        history.push(db, centreHz, widthHz)
+        leveler.update(db, centreHz, widthHz)
+    }
+
+    /**
+     * The newest lines the bitmap can show. [pixelRows] is the waterfall's pixel height.
+     * This does not drop anything from [history]: a later, taller pane reads further
+     * into the same ring.
+     */
+    fun linesFor(pixelRows: Int): List<SpectrumSlice> {
+        if (pixelRows <= 0) return emptyList()
+        val all = history.snapshot()
+        if (all.size <= pixelRows) return all
+        return all.subList(0, pixelRows)
     }
 }
 

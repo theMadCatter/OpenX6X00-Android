@@ -656,6 +656,7 @@ fun SpectrumStack(
     onZoom: (narrower: Boolean) -> Unit,
     waterfallShare: Float = 0f,
     ridgeHold: RidgeHold,
+    waterfallHold: WaterfallHold,
     modifier: Modifier = Modifier,
 ) {
     // Off while the activity is stopped. Collecting here is what scrolls the waterfall
@@ -666,16 +667,12 @@ fun SpectrumStack(
         if (!drawScope) return@LaunchedEffect
         spectrum.collect { next -> frame = next }
     }
-    // One line per pixel of this pane, up to the phone cap. The radio's own buffer is 480,
-    // which is its screen, not a tall phone waterfall.
-    val history = remember { SpectrumHistory(WaterfallDisplay.MAX_ROWS) }
     // Paths and the sample scratch are draw buffers. The history they read is [ridgeHold],
     // which the screen keeps across rotation. A ring allocated here would be empty after
     // the pane is disposed, and the field would be a thin lawn until it filled again.
     val ridgeFills = remember { Array(SpectrumRidge.COLOR_STEPS) { Path() } }
     val ridgeVeil = remember { Path() }
     val ridgeScratch = remember { RidgeScratch() }
-    val leveler = remember { WaterfallLeveler() }
     // The smoothed trace and the peaks. Remembered with the pane so a recomposition
     // does not draw the raw frame, and a rotation starts from the next frame rather
     // than from a trace that belonged to a different pixel width.
@@ -700,7 +697,10 @@ fun SpectrumStack(
     LaunchedEffect(drawScope, frame?.sequence, frame?.centreHz, frame?.widthHz) {
         if (!drawScope) return@LaunchedEffect
         val current = frame ?: return@LaunchedEffect
-        history.push(current.db, current.centreHz, current.widthHz)
+        // The ring is the screen's, not this pane's. A repeated sequence (the frame still
+        // current after a rotation) does not scroll it. The bitmap below is rebuilt from
+        // whatever lines are already stored as soon as the pane's pixel size changes.
+        waterfallHold.accept(current.db, current.centreHz, current.widthHz, current.sequence)
         // The 2D trace is smoothed here, once per frame. Draw only reads it.
         spectrumTrace.accept(
             current.db,
@@ -716,17 +716,18 @@ fun SpectrumStack(
         ridgeHold.accept(current.db, current.bins, current.centreHz, current.widthHz, current.sequence)
         tick++
     }
-    val rows = remember(tick) { history.snapshot() }
+    // waterRows is in the key so a taller or shorter pane reads the ring again before the
+    // next frame arrives. linesFor does not drop the lines that fall outside this height.
+    val rows = remember(tick, waterRows) { waterfallHold.linesFor(waterRows) }
     // The window eases toward the newest row. Taking the percentile of the whole history, or
     // replacing it every frame, is what made a quiet band shimmer.
-    val window = remember(tick, state?.transmitting, frame?.centreHz, frame?.widthHz) {
-        if (state?.transmitting == true) {
-            FirmwareLook.TX_MIN.roundToInt() to FirmwareLook.TX_MAX.roundToInt()
-        } else {
-            rows.firstOrNull()?.db?.let {
-                leveler.update(it, frame?.centreHz ?: 0, frame?.widthHz ?: 0)
-            } ?: (leveler.floor to leveler.ceiling)
-        }
+    // The leveler moved with the line, inside [waterfallHold.accept]. Reading it here
+    // paints a rotated pane with the window it already had, instead of the default
+    // floor, for the frames until the tracker would have caught up.
+    val window = if (state?.transmitting == true) {
+        FirmwareLook.TX_MIN.roundToInt() to FirmwareLook.TX_MAX.roundToInt()
+    } else {
+        waterfallHold.leveler.floor to waterfallHold.leveler.ceiling
     }
     // Painted at the view's pixel width, one history row per pixel. Not inside draw: drawImage
     // holds the bitmap until the frame is presented, and recycling it there blanks the waterfall.
@@ -762,9 +763,10 @@ fun SpectrumStack(
             val split = RadioFace.scopeSplit(
                 paneHeight.toFloat(), scalePx, planPx, waterfallShare, guardPx, ridge, scopeLayout,
             )
+            // The bitmap is this many pixels tall, one line each. The ring stays at its
+            // own cap, so growing this number repaints lines that were already collected.
             val rowsHigh = split.waterfallPx.roundToInt().coerceIn(1, WaterfallDisplay.MAX_ROWS)
             waterRows = rowsHigh
-            history.resize(rowsHigh)
         }
         Canvas(
             Modifier
@@ -877,7 +879,7 @@ fun SpectrumStack(
                 drawRect(packedArgb(FirmwareLook.PANEL), size = Size(size.width, specH))
                 val samples = size.width.roundToInt().coerceIn(2, 4096)
                 val (minDb, maxDb) = if (scopeLayout == ScopeLayout.SPECTRUM && state?.transmitting != true) {
-                    FirmwareLook.paneWindow(leveler.noiseDb, spectrumTrace.loudest())
+                    FirmwareLook.paneWindow(waterfallHold.leveler.noiseDb, spectrumTrace.loudest())
                 } else {
                     window.first.toFloat() to window.second.toFloat()
                 }
