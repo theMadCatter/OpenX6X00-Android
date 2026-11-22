@@ -43,11 +43,20 @@ object FirmwareLook {
     /** theme.h RF.Guru `panel` and `bg`. Spectrum ground, and the spectrum passband tint. */
     const val PANEL = 0xFF08090C.toInt()
 
-    /** theme.h RF.Guru `text`. Dashed frequency lines on the waterfall, at [GRID_OPA]. */
+    /**
+     * theme.h RF.Guru `text`. freq_scale.c paints the waterfall dashes in this colour.
+     * The opacity is [GRID_OPA] (LV_OPA_40) and the pattern is [GRID_DASH] px on,
+     * [GRID_DASH] px off, one panel pixel wide. A phone draws that same colour and
+     * opacity, but the stroke has to be at least 1 dp: one phone pixel is antialiased
+     * away on a Gauss waterfall.
+     */
     const val GRID = 0xFFF1F5F9.toInt()
 
     /** LV_OPA_40. freq_scale.c draws the dashes at this opacity. */
     const val GRID_OPA = 102
+
+    /** freq_scale.c line dash width and gap, in panel pixels. */
+    const val GRID_DASH = 4
 
     /** LV_OPA_50. spectrum_view.c shades the passband with this at filter-shade 4. */
     const val SPEC_SHADE = 127
@@ -130,6 +139,47 @@ object FirmwareLook {
         return min to (min + COLOUR_RANGE)
     }
 
+    /**
+     * How many dB a spectrum-only pane keeps even when the band is quiet.
+     * Less than this and a flat noise floor would be stretched into a solid block.
+     */
+    const val PANE_MIN_SPAN_DB = 12f
+
+    /**
+     * Where the loudest bin sits, as a fraction of the way up the spectrum-only pane.
+     * The radio's own spectrum widget is about 76 px (p_spectrum_height), so the 48 dB
+     * colour window fills it. The phone's spectrum-only pane is the whole scope, and
+     * that same window leaves the trace as a ribbon on the floor with empty pane above it.
+     */
+    const val PANE_PEAK_FRACTION = 0.94f
+
+    /**
+     * Where the noise floor sits in that same pane. The fill under the noise is this
+     * fraction of the height, so the ground is a band and the rest of the pane is the
+     * signal. The combined spectrum-and-waterfall view does not use this; it keeps
+     * [colourWindow], which is what the waterfall colours use.
+     */
+    const val PANE_FLOOR_FRACTION = 0.12f
+
+    /**
+     * Vertical scale for a spectrum that has the whole pane.
+     *
+     * [floorDb] is the tracked noise, not the colour window's clamped minimum.
+     * [peakDb] is the loudest smoothed bin. The peak is placed at [PANE_PEAK_FRACTION]
+     * and the noise at [PANE_FLOOR_FRACTION], with at least [PANE_MIN_SPAN_DB] between
+     * them. A carrier then reaches the top of the pane the way the 3D field does,
+     * instead of sitting in the bottom of a 48 dB window.
+     */
+    fun paneWindow(floorDb: Float, peakDb: Float): Pair<Float, Float> {
+        val floor = if (floorDb.isNaN()) S_MIN else floorDb
+        val peak = if (peakDb.isNaN()) floor else peakDb
+        val span = (peak - floor).coerceAtLeast(PANE_MIN_SPAN_DB)
+        val used = (PANE_PEAK_FRACTION - PANE_FLOOR_FRACTION).coerceAtLeast(0.5f)
+        val window = span / used
+        val min = floor - PANE_FLOOR_FRACTION * window
+        return min to (min + window)
+    }
+
     /** Where [db] sits in the spectrum pane. The ceiling is the top, the floor is the bottom. */
     fun traceY(db: Float, min: Float, max: Float, height: Float): Float {
         if (height <= 0f) return 0f
@@ -191,7 +241,17 @@ class SpectrumTrace(capacity: Int = 1024) {
     private var width = 0
     private var primed = false
 
+    /**
+     * The loudest smoothed bin. Spectrum-only uses this as the top of the pane.
+     * It is not the minimum: a tune fills the bins that just entered with [FirmwareLook.S_MIN],
+     * and taking that as the floor would stretch the scale and put the trace back in a ribbon.
+     */
+    private var loud = FirmwareLook.S_MIN
+
     val length: Int get() = n
+
+    /** The loudest bin last folded in, or [FirmwareLook.S_MIN] before the first frame. */
+    fun loudest(): Float = loud
 
     fun levelAt(index: Float): Float? = read(shown, index)
 
@@ -213,7 +273,11 @@ class SpectrumTrace(capacity: Int = 1024) {
         transmitting: Boolean,
     ) {
         val count = bins.coerceIn(0, minOf(db.size, shown.size))
-        if (count == 0) return
+        if (count == 0) {
+            n = 0
+            loud = FirmwareLook.S_MIN
+            return
+        }
         val zoomed = primed && (widthHz != width || count != n)
         if (!primed || zoomed) {
             for (i in 0 until count) {
@@ -226,6 +290,7 @@ class SpectrumTrace(capacity: Int = 1024) {
             centre = centreHz
             width = widthHz
             primed = true
+            rememberLoudest(count)
             return
         }
         if (width > 0 && centreHz != centre) {
@@ -254,6 +319,20 @@ class SpectrumTrace(capacity: Int = 1024) {
             }
         }
         n = count
+        rememberLoudest(count)
+    }
+
+    /**
+     * One pass over the bins this frame kept. The scratch used by [slide] is not
+     * touched: this only reads [shown], and it runs after the slide has finished.
+     */
+    private fun rememberLoudest(count: Int) {
+        var hi = FirmwareLook.S_MIN
+        for (i in 0 until count) {
+            val v = shown[i]
+            if (v > hi) hi = v
+        }
+        loud = hi
     }
 
     /** Linear sample, the same rule as [WaterfallDisplay.sampleBin]. */

@@ -100,5 +100,41 @@ class FirmwareLookTest {
         val jumped = leveler.update(loud, centreHz = 7_100_000, widthHz = 100_000)
         assertEquals(FirmwareLook.S8.toInt(), jumped.first)
         assertEquals(FirmwareLook.S8.toInt() + FirmwareLook.COLOUR_RANGE.toInt(), jumped.second)
+        // The colour window clamps a loud floor down to S8. The noise the spectrum-only
+        // pane scales from is the reading itself, so that clamp does not squash the trace.
+        assertEquals(-60f, leveler.noiseDb, 0.5f)
+    }
+
+    @Test
+    fun theLoudestBinIsTheTopOfASpectrumOnlyPane() {
+        val trace = SpectrumTrace()
+        val db = ByteArray(8) { (-90).toByte() }
+        db[3] = (-40).toByte()
+        trace.accept(db, 8, centreHz = 0, widthHz = 1000, nowMs = 0L, transmitting = false)
+        assertEquals(-40f, trace.loudest(), 0.1f)
+        // The loudest bin is at the top of a tall pane and the noise stays low, so the
+        // fill uses the pane instead of sitting in a ribbon on the floor.
+        val (min, max) = FirmwareLook.paneWindow(floorDb = -100f, peakDb = trace.loudest())
+        val height = 400f
+        val peakY = FirmwareLook.traceY(-40f, min, max, height)
+        val floorY = FirmwareLook.traceY(-100f, min, max, height)
+        assertTrue(peakY < height * 0.12f)
+        assertTrue(floorY > height * 0.80f)
+        // A quiet band keeps a minimum span, so the trace does not become a solid block
+        // and it does not collapse to a hairline either.
+        val quiet = FirmwareLook.paneWindow(-100f, -97f)
+        val quietPeak = FirmwareLook.traceY(-97f, quiet.first, quiet.second, height)
+        val quietFloor = FirmwareLook.traceY(-100f, quiet.first, quiet.second, height)
+        assertTrue(quietFloor - quietPeak > height * 0.10f)
+        assertTrue(quietFloor < height)
+    }
+
+    @Test
+    fun frequencyDashesUseTheThemeTextAtFortyPercent() {
+        // freq_scale.c: TC(text) at LV_OPA_40, dash 4, gap 4. The phone stroke is 1 dp
+        // because the firmware's 1 px is invisible on a Gauss waterfall.
+        assertEquals(0xFFF1F5F9.toInt(), FirmwareLook.GRID)
+        assertEquals(102, FirmwareLook.GRID_OPA)
+        assertEquals(4, FirmwareLook.GRID_DASH)
     }
 }

@@ -488,6 +488,32 @@ object RadioFace {
     }
 
     /**
+     * How wide the frequency labels may be, given the Zoom chip in the top-right corner.
+     *
+     * Landscape spectrum-plus-waterfall keeps the trace only as tall as [zoomGuardPx],
+     * which is the chip. The right-hand label is then clamped to the edge of the scale,
+     * and that edge is directly under the chip. Reserving [zoomReservePx] pulls the label
+     * clear. A taller trace (portrait, or spectrum on its own) has the scale below the
+     * chip, so the labels use the whole width.
+     *
+     * The old test was `spectrum + 2 < zoomGuard`. The split already lifts the trace up
+     * to the guard, so that test was false on the layout that collides and the inset
+     * never ran.
+     */
+    fun scaleLabelWidth(
+        viewWidthPx: Float,
+        spectrumPx: Float,
+        zoomGuardPx: Float,
+        scalePx: Float,
+        zoomReservePx: Float,
+    ): Float {
+        if (viewWidthPx <= 0f) return 0f
+        val chipReachesScale = spectrumPx <= zoomGuardPx + scalePx
+        val usable = if (chipReachesScale) viewWidthPx - zoomReservePx else viewWidthPx
+        return usable.coerceAtLeast(1f)
+    }
+
+    /**
      * Key names broken into rows that fit [widthDp].
      *
      * Compose Foundation in this project does not have the `FlowRow` overflow overload the

@@ -66,6 +66,15 @@ class WaterfallLeveler {
     var ceiling: Int = -120 + RadioFace.WATERFALL_MIN_SPAN_DB
         private set
 
+    /**
+     * The tracked noise itself, before [FirmwareLook.colourWindow] clamps it to S8.
+     * Spectrum-only scales from this. The colour window's minimum is a different
+     * number: a loud floor is pulled down to S8, and using that as the trace floor
+     * would leave the signal in a ribbon again.
+     */
+    var noiseDb: Float = -120f
+        private set
+
     private val track = FirmwareLook.FloorTrack()
     private val groups = FloatArray(256)
     private var primed = false
@@ -84,6 +93,7 @@ class WaterfallLeveler {
         lastCentre = centreHz
         val estimate = FirmwareLook.noiseFloorDb(newest, newest.size, groups)
         val tracked = if (estimate.isNaN()) floor.toFloat() else track.update(estimate)
+        noiseDb = tracked
         val (min, max) = FirmwareLook.colourWindow(tracked)
         floor = min.roundToInt()
         ceiling = max.roundToInt()
