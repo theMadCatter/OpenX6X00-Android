@@ -699,15 +699,19 @@ class SpectrumMemory(
 }
 
 /**
- * The 3D vertical scale, separate from the waterfall's window.
+ * The 3D vertical scale.
  *
- * The floor follows the quiet end of the frame. The ceiling follows the loud
- * end, and it rises quickly so a new carrier is not clipped while the scale
- * catches up. It falls slowly, so one quiet frame does not collapse the peaks.
- * A quiet band is held open by [SpectrumRidge.MIN_SPAN_DB], which gives the
- * grass room to show a few dB of texture.
+ * The floor is the same noise estimate the radio uses for its colours
+ * ([FirmwareLook.noiseFloorDb]): groups of bins, so one carrier does not lift
+ * the lawn. The ceiling still follows the loud end of the frame and stays at
+ * least [SpectrumRidge.MIN_SPAN_DB] above the floor. The radio's own 3D range
+ * is 40 dB (`p_wf_3d_range`). Using that here would shorten a carrier that the
+ * grass field is built to draw near the top of the pane, so the height scale
+ * stays the one the Aether and FT views already use. The ceiling rises quickly
+ * and falls slowly, and a quiet band keeps enough span for the grass texture.
  *
- * The histogram is the one allocated here. [update] does not allocate.
+ * The histogram and the group scratch are the ones allocated here. [update]
+ * does not allocate.
  */
 class RidgeRange {
     var floorDb: Float = -120f
@@ -716,6 +720,7 @@ class RidgeRange {
         private set
 
     private val hist = IntArray(256)
+    private val groups = FloatArray(256)
     private var primed = false
 
     fun reset() {
@@ -732,7 +737,8 @@ class RidgeRange {
             hist[v + 128]++
             if (v > maxDb) maxDb = v
         }
-        val noise = percentile(n, 0.12f).toFloat()
+        val estimated = FirmwareLook.noiseFloorDb(db, n, groups)
+        val noise = if (estimated.isNaN()) percentile(n, 0.12f).toFloat() else estimated
         val loud = max(percentile(n, 0.998f), maxDb).toFloat()
         val floorTarget = noise
         val ceilTarget = max(loud, floorTarget + SpectrumRidge.MIN_SPAN_DB)

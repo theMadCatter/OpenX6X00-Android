@@ -12,7 +12,7 @@
 // - Classic and Gauss are the 256-entry tables. Grey, Fire, Ice and Rainbow are the same
 //   stops theme.c ramps with theme_ramp_palette, steps = 0 (smooth).
 // - A pixel samples the bins on either side of its frequency, the way row_pixels does.
-// - The colour window eases toward the newest row instead of jumping to it.
+// - The colour window is the radio's: 5 dB under the tracked noise floor, across 48 dB.
 //
 // The Panel socket cannot ask for a bigger FFT or a faster spectrum. remote_server.c
 // always sends WATERFALL_NFFT (1024) int8 bins, one frame each time the DSP has a new
@@ -55,45 +55,43 @@ enum class ScreenPicture { SHARP, BALANCED, FAST }
 /**
  * The colour scale, remembered across frames.
  *
- * A raw percentile from one FFT jumps by a few dB every frame, and the whole waterfall
- * then shimmers. [follow] is the fraction of that jump taken this frame, so the floor and
- * the ceiling glide. The first frame is taken whole, or the display would fade in from black.
+ * The radio's tracker (dsp_math.h) takes the first noise estimate whole and then
+ * follows it slowly. A tune farther than the span resets that memory, which is the
+ * DSP's floor reset on a band change. [centreHz] and [widthHz] are that span.
+ * Older waterfall rows stay on the colours they were painted with.
  */
-class WaterfallLeveler(private val follow: Float = 0.18f) {
+class WaterfallLeveler {
     var floor: Int = -120
         private set
     var ceiling: Int = -120 + RadioFace.WATERFALL_MIN_SPAN_DB
         private set
 
+    private val track = FirmwareLook.FloorTrack()
+    private val groups = FloatArray(256)
     private var primed = false
+    private var lastCentre = 0
 
     fun reset() {
         primed = false
+        track.reset()
     }
 
-    /** [newest] is the row that just arrived. Older rows stay on the scale they were painted with. */
-    fun update(newest: ByteArray): Pair<Int, Int> {
-        val (rawFloor, rawCeiling) = RadioFace.waterfallWindow(listOf(newest))
-        if (!primed) {
-            floor = rawFloor
-            ceiling = rawCeiling
-            primed = true
-            return floor to ceiling
+    fun update(newest: ByteArray, centreHz: Int = 0, widthHz: Int = 0): Pair<Int, Int> {
+        // Farther than the span: another band. The next estimate is taken as it is.
+        if (primed && widthHz > 0 && kotlin.math.abs(centreHz - lastCentre) > widthHz) {
+            track.reset()
         }
-        floor = ease(floor, rawFloor)
-        ceiling = ease(ceiling, rawCeiling)
+        lastCentre = centreHz
+        val estimate = FirmwareLook.noiseFloorDb(newest, newest.size, groups)
+        val tracked = if (estimate.isNaN()) floor.toFloat() else track.update(estimate)
+        val (min, max) = FirmwareLook.colourWindow(tracked)
+        floor = min.roundToInt()
+        ceiling = max.roundToInt()
         if (ceiling < floor + RadioFace.WATERFALL_MIN_SPAN_DB) {
             ceiling = floor + RadioFace.WATERFALL_MIN_SPAN_DB
         }
+        primed = true
         return floor to ceiling
-    }
-
-    private fun ease(current: Int, target: Int): Int {
-        if (current == target) return current
-        val delta = target - current
-        val step = (delta * follow).roundToInt()
-        val moved = if (step == 0) delta / kotlin.math.abs(delta) else step
-        return current + moved
     }
 }
 
