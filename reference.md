@@ -518,3 +518,23 @@ The ring is now `WaterfallHold` on `RadioViewModel`, the same place as the 3D `R
 `theWaterfallHistorySurvivesATallerPane` stores 300 lines, reads 80 of them, then 900, and requires the oldest to still be there. Collecting the current sequence again leaves the count at 300. Reading 40 and then 200 still finds the same lines.
 
 `./gradlew testDebugUnitTest assembleDebug` after this: 228 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+## Portrait spectrum height and waterfall chip overlap
+
+Chris (KD0CQ) approved two layout fixes on the same branch.
+
+**What was wrong**
+
+1. Portrait Radio-tab spectrum-only, both the 2D trace and the 3D field, stayed a short strip. A large empty region sat between the SSB / band-plan bar and the needle meter. `scopeSplit` already gives spectrum-only the whole plot above the scale and the plan, in both aspects, and the 2D pane window and the 3D grass already fill whatever height they are given. The short strip was the portrait row. Landscape puts the scope in the weighted slot of the screen column, so it grows. Portrait nests the scope under the frequency strip, beside the rail, in the row above the meter. That row was not locked to the leftover height, so the band plan stopped and the rest of the space above the meter stayed empty.
+
+2. Portrait waterfall-only draws the scale at the top of the plot, because there is no trace above it. The palette, 2D/3D, layout, and Zoom chips were overlaid on that same top edge, so the labels and the chips covered each other and the first lines of the waterfall. Zoom also covered the right-hand label. The 32 dp fade under the chips darkened that strip.
+
+**What changed**
+
+- `PortraitOperating` measures the space above the meter and sets the rail row to that height. The frequency strip keeps its own height. The scope takes the rest, for 2D and 3D, so spectrum-only ends on the band plan.
+- Waterfall-only places the same chip row above the plot. The frequency labels stay in the scale strip. The band plan stays under the scale. The waterfall starts under the plan. The top fade is not drawn in that layout, and the zoom corner is not reserved on the scale, because Zoom is in the chip row.
+- Combined and spectrum-only still overlay the chips on the trace, so a landscape waterfall does not lose that row. `scopeSplit` shares for S+W are unchanged. Spots, rotation, and `WaterfallHold` are unchanged. The ring is still on the view model. A taller pane still repaints the lines it already has.
+
+`RadioFace.scopeBands` is the arrangement the tests lock. Spectrum-only reports no chip band and no waterfall, and the scale plus the plan land on the bottom of the pane, for both the trace and the ridge. Waterfall-only reports the chip band first, then the scale, and the labels start where the chips end.
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 229 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.

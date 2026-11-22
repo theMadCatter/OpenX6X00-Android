@@ -257,6 +257,67 @@ class RadioFaceTest {
     }
 
     @Test
+    fun portraitSpectrumOnlyEndsOnTheBandPlanAndWaterfallSeparatesTheChips() {
+        // The portrait column above the meter. Spectrum-only, whether the plot is the
+        // 2D trace or the 3D field, uses that whole column. The chips stay over the
+        // plot, so they do not open a gap under the band plan.
+        val tall = 800f
+        val scale = 16f
+        val plan = 8f
+        val chips = 36f
+        for (ridge in listOf(false, true)) {
+            val bands = RadioFace.scopeBands(
+                heightPx = tall,
+                chipPx = chips,
+                scalePx = scale,
+                planPx = plan,
+                waterfallShare = 0f,
+                zoomGuardPx = 24f,
+                ridge = ridge,
+                layout = ScopeLayout.SPECTRUM,
+            )
+            assertEquals(0f, bands.chipPx, 0.01f)
+            assertEquals(0f, bands.waterfallPx, 0.01f)
+            assertEquals(tall, bands.total(), 0.01f)
+            assertEquals(tall, bands.scaleTop + bands.scalePx + bands.planPx, 0.01f)
+        }
+        // Waterfall-only. The chip row is its own band. The frequency labels start
+        // where that row ends, and the waterfall is what remains under the plan.
+        val water = RadioFace.scopeBands(
+            heightPx = tall,
+            chipPx = chips,
+            scalePx = scale,
+            planPx = plan,
+            waterfallShare = 0f,
+            zoomGuardPx = 24f,
+            layout = ScopeLayout.WATERFALL,
+        )
+        assertEquals(chips, water.chipPx, 0.01f)
+        assertEquals(0f, water.spectrumPx, 0.01f)
+        assertEquals(chips, water.scaleTop, 0.01f)
+        assertTrue(water.scaleTop >= water.chipPx)
+        assertTrue(water.waterfallPx > tall * 0.8f)
+        assertEquals(tall, water.total(), 0.01f)
+        // Combined portrait still overlays the chips and keeps the waterfall the larger part.
+        val both = RadioFace.scopeBands(
+            heightPx = tall,
+            chipPx = chips,
+            scalePx = scale,
+            planPx = plan,
+            waterfallShare = 0f,
+            zoomGuardPx = 24f,
+            layout = ScopeLayout.BOTH,
+        )
+        assertEquals(0f, both.chipPx, 0.01f)
+        assertTrue(both.waterfallPx > both.spectrumPx)
+        // Zoom lives in the chip row here, so the right-hand label keeps the full strip.
+        val full = RadioFace.scaleLabelWidth(
+            900f, 0f, 66f, 44f, 180f, ScopeLayout.WATERFALL,
+        )
+        assertEquals(900f, full, 0.01f)
+    }
+
+    @Test
     fun keyNamesPackOntoRowsThatFitTheWidth() {
         val names = listOf("GEN", "KEY", "DFN", "BAND_DOWN", "BAND_UP", "APP", "MSG")
         val rows = RadioFace.packKeyRows(names, widthDp = 180f)
