@@ -58,6 +58,17 @@ class PanelEventBus(scope: CoroutineScope) {
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
+    /**
+     * WeFax scan lines. A one-deep slot would keep only the newest line and the
+     * chart would be a single stripe. Thirty-two is enough for the UI to fall
+     * a moment behind. Past that, the oldest line is dropped, which is what
+     * the radio already does when a client has no room.
+     */
+    private val faxPictures = MutableSharedFlow<PanelEvent>(
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
     /** Control, state, role, errors, and every other text line. Never dropped for a frame. */
     val events: Flow<PanelEvent> = text.asSharedFlow()
 
@@ -69,6 +80,9 @@ class PanelEventBus(scope: CoroutineScope) {
      * spectrum frame nor waits behind one, and neither of them can push `ctl` out.
      */
     val appFrames: Flow<PanelEvent> = appPictures.asSharedFlow()
+
+    /** WeFax scan lines, in order, dropped only when this buffer is already full. */
+    val faxFrames: Flow<PanelEvent> = faxPictures.asSharedFlow()
 
     private val queued = AtomicLong(0)
 
@@ -127,6 +141,7 @@ class PanelEventBus(scope: CoroutineScope) {
         when (event) {
             is PanelEvent.Spectrum, is PanelEvent.Screen -> pictures.tryEmit(event)
             is PanelEvent.AppWaterfall -> appPictures.tryEmit(event)
+            is PanelEvent.WeFaxRow -> faxPictures.tryEmit(event)
             else -> enqueue(generation, event)
         }
     }

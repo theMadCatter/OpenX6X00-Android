@@ -255,11 +255,15 @@ object RadioFace {
     )
 
     /**
-     * Digital modes the firmware opens from the Modes app and the Panel line does not.
-     * JS8 left this list when v0.3.13 added the js8 commands. It has its own screen.
+     * Digital modes the firmware opens on the radio and the Panel line does not stream.
+     *
+     * JS8, FT8 (which is also FT4 and FT2), CW decode and WeFax left this list
+     * because the panel sends their text or their picture. PSK, RTTY, Olivia,
+     * SSTV, WSPR and Navtex still have no panel or TCI stream. They stay here
+     * so the mode list does not grow a screen that would have nothing to show.
      */
     val pendingDigitalModes: List<String> = listOf(
-        "PSK", "RTTY", "Olivia", "SSTV", "WSPR", "Navtex", "WeFax",
+        "PSK", "RTTY", "Olivia", "SSTV", "WSPR", "Navtex",
     )
 
     val pages: List<FacePage> = buildPages()

@@ -6,10 +6,12 @@ package radio.kd0cq.x6100.digital
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import radio.kd0cq.x6100.log.Qso
+import radio.kd0cq.x6100.net.Ft8Row
 
 class DigitalTest {
 
@@ -123,6 +125,90 @@ class DigitalTest {
         assertTrue(UsAdvanced.dataCovers(50_100_000L, 50_100_160L))
     }
 
+    @Test
+    fun js8AndFt8RowsFollowTheRadioScreens() {
+        val row = Js8Protocol.parse(
+            """js8r {"id":1,"utc":123045,"snr":-12,"f":1500,"sp":1,"tx":0,"me":1,"cq":0,"hb":0,"grp":0,"lc":1,"part":0,"chk":-1,"fr":"W1AW","to":"KD0CQ","g":"","x":"HELLO"}""",
+        )
+        assertNotNull(row)
+        val message = row!!
+        assertEquals(-1, message.checksum)
+        assertEquals("12:30:45 -12 1500 F  [HELLO]  (bad checksum)", Js8Look.line(message))
+        assertEquals(Js8Look.Kind.TO_ME, Js8Look.kind(message))
+        assertEquals(Js8Look.ROW_TO_ME, Js8Look.background(Js8Look.Kind.TO_ME))
+        val heartbeat = message.copy(toMe = false, heartbeat = true, lowConfidence = false, checksum = 1, submode = 0, text = "HB")
+        assertEquals(Js8Look.Kind.HEARTBEAT, Js8Look.kind(heartbeat))
+        assertEquals(Js8Look.MUTE, Js8Look.foreground(Js8Look.Kind.HEARTBEAT))
+        val flash = message.copy(
+            toMe = false,
+            heartbeat = false,
+            lowConfidence = false,
+            checksum = 1,
+            submode = 0,
+            group = true,
+            to = "@GSTFLASH",
+            text = "@GSTFLASH now",
+        )
+        assertEquals(Js8Look.Kind.ALERT, Js8Look.kind(flash))
+        val both = listOf(message, heartbeat)
+        assertEquals(1, Js8Look.visible(both, Js8Look.Show.NO_HB, "").size)
+        assertEquals(1, Js8Look.visible(both, Js8Look.Show.DIRECTED, "").size)
+        assertEquals("FT4", Ft8Look.protocolName(0))
+        assertEquals("FT8", Ft8Look.protocolName(1))
+        assertEquals("FT2", Ft8Look.protocolName(2))
+        assertEquals("FT2", Ft8Look.protocolName(9))
+        assertEquals(83, Ft8Look.toneWidthHz(0))
+        assertEquals(50, Ft8Look.toneWidthHz(1))
+        assertEquals(167, Ft8Look.toneWidthHz(2))
+        assertEquals("12:00:15", Ft8Look.slotTime("12:00:15 CQ KD0CQ"))
+        assertEquals("CQ KD0CQ", Ft8Look.body("12:00:15 CQ KD0CQ"))
+        assertNull(Ft8Look.slotTime("CQ KD0CQ"))
+        val lines = ft8Lines(
+            listOf(
+                ft8("12:00:15 CQ A", Ft8Look.CELL_CQ),
+                ft8("12:00:15 KD0CQ", Ft8Look.CELL_MSG),
+                ft8("12:00:30 CQ B", Ft8Look.CELL_CQ),
+            ),
+        )
+        assertTrue(lines[0] is Ft8Line.Slot)
+        assertTrue(lines[1] is Ft8Line.Decode)
+        assertEquals("CQ A", (lines[1] as Ft8Line.Decode).body)
+        assertTrue(lines[3] is Ft8Line.Slot)
+        assertEquals(listOf(250, 500, 750, 1000), waterfallTicks(200, 1200))
+        assertEquals(50f, waterfallX(1000, 0, 2000, 100f)!!, 0.01f)
+        assertNull(waterfallX(3000, 0, 2000, 100f))
+        val fax = WeFaxProtocol.parse(
+            """{"open":1,"auto":1,"fax":0,"tx":0,"txp":0,"gen":4,"rows":12,"freq":8035000,"saves":1,"station":"NOAA","saved":"","plan":1,"next":"18:00"}""",
+        )
+        assertNotNull(fax)
+        assertTrue(fax!!.plan)
+        assertEquals("NOAA", fax.station)
+        assertEquals(4L, fax.generation)
+        assertNull(UsAdvanced.refuseTransmit(true, true, 14_074_000L, 1500, 50, "FT8 transmit offset"))
+        assertNotNull(UsAdvanced.refuseTransmit(false, true, 14_074_000L, 1500, 50, "FT8 transmit offset"))
+        assertNotNull(UsAdvanced.refuseTransmit(true, true, 3_844_000L, 1500, 50, "offset"))
+        assertEquals(
+            "The radio has not reported the FT8 transmit offset yet.",
+            UsAdvanced.refuseTransmit(true, true, 14_074_000L, null, 50, "FT8 transmit offset"),
+        )
+    }
+
+    private fun ft8(text: String, cell: Int) = Ft8Row(
+        id = text.hashCode().toLong(),
+        cellType = cell,
+        text = text,
+        call = "",
+        grid = "",
+        freqHz = 1000,
+        snrDb = -10,
+        toMe = cell == Ft8Look.CELL_TO_ME,
+        workedType = 0,
+        distanceKm = 0,
+        pota = 0,
+        odd = false,
+        country = "",
+    )
+
     private fun row(
         id: Long,
         to: String,
@@ -142,7 +228,7 @@ class DigitalTest {
         group = to.startsWith("@"),
         lowConfidence = false,
         partial = false,
-        checksum = true,
+        checksum = 1,
         from = "W1AW",
         to = to,
         grid = "",

@@ -16,8 +16,9 @@
 // not a command. The screen asks before Send and CQ, and it does not call
 // any transmit word from composition.
 //
-// FT8 is unchanged. "ft8 reply ID" is still the FT8 app's own transmit, and
-// this file still does not key PTT.
+// The colours and the row text below are the night values from the radio's
+// own LVGL screens (src/js8_window.c, src/ft8/decode_list.c, src/theme.h).
+// This file still does not open a socket and does not key PTT.
 
 package radio.kd0cq.x6100.digital
 
@@ -67,7 +68,14 @@ data class Js8Row(
     val group: Boolean,
     val lowConfidence: Boolean,
     val partial: Boolean,
-    val checksum: Boolean,
+
+    /**
+     * The radio's checksum code (`chk` in the JSON). Negative is a bad
+     * checksum, which the list marks. Zero means the field was absent.
+     * It used to be a boolean, and a negative code is non-zero, so a bad
+     * checksum was stored as good.
+     */
+    val checksum: Int,
     val from: String,
     val to: String,
     val grid: String,
@@ -209,7 +217,7 @@ object Js8Protocol {
             group = o.on("grp"),
             lowConfidence = o.on("lc"),
             partial = o.on("part"),
-            checksum = o.on("chk"),
+            checksum = o.optInt("chk"),
             from = o.optString("fr"),
             to = o.optString("to"),
             grid = o.optString("g"),
@@ -364,6 +372,424 @@ object UsAdvanced {
     fun dataCovers(lowHz: Long, highHz: Long): Boolean {
         if (highHz < lowHz) return false
         return dataHz.any { band -> lowHz in band && highHz in band }
+    }
+
+    /**
+     * Why a data transmission must not be sent, or null when the dial, the
+     * audio offset and the tone width sit inside one segment.
+     *
+     * A missing offset is not zero. Guessing zero could put the tones outside
+     * the segment the operator can see. Turning a transmission off does not
+     * call this: Stop, and a CQ that is already on, have to work when the
+     * offset is the thing that is wrong.
+     */
+    fun refuseTransmit(
+        holdingControls: Boolean,
+        txAllowed: Boolean,
+        dialHz: Long?,
+        offsetHz: Int?,
+        widthHz: Int,
+        offsetName: String,
+    ): String? {
+        if (!holdingControls) return "Take control before transmitting."
+        if (!txAllowed) return "This session is not allowed to transmit."
+        val dial = dialHz ?: return "The radio has not reported a dial frequency yet."
+        val offset = offsetHz ?: return "The radio has not reported the $offsetName yet."
+        val low = dial + offset
+        val high = low + widthHz
+        if (!dataCovers(low, high)) {
+            return "That signal ($low–$high Hz) is outside the US Advanced data segments."
+        }
+        return null
+    }
+}
+
+/**
+ * How the radio's JS8 list draws one message.
+ *
+ * `js8_window.c` `format_row` writes `hh:mm:ss`, the SNR, the offset, a speed
+ * letter when it is not Normal, then the text. `message_bg` picks the row
+ * colour in this order: our TX, an alert, a call to us, a CQ, a heartbeat,
+ * a group, then the plain panel. The night hexes are the first column of
+ * `theme.h`. GhostNet's flash is the alert, because the panel JSON has no
+ * separate alert-word flag.
+ *
+ * The Show button is the radio's: every decode, everything except heartbeats,
+ * or only what is to us or to a group. GhostNet is the phone's extra filter
+ * on top of that. The radio's Directed view also keeps traffic near the
+ * selected offset, using the speed's receive threshold. That threshold is
+ * not in the JSON, so this Directed view is the call and group half only.
+ */
+object Js8Look {
+    const val ROW_TX = 0xFF0A1A33.toInt()
+    const val ROW_ALERT = 0xFF5B21B6.toInt()
+    const val ROW_ALERT_TEXT = 0xFFDDD6FE.toInt()
+    const val ROW_TO_ME = 0xFF991B1B.toInt()
+    const val ROW_CQ = 0xFF14532D.toInt()
+    const val ROW_GROUP = 0xFF1E3A5F.toInt()
+    const val ROW_BAR = 0xFF34D399.toInt()
+    const val PANEL = 0xFF13161D.toInt()
+    const val TEXT = 0xFFF1F5F9.toInt()
+    const val MUTE = 0xFF64748B.toInt()
+
+    /** The palette tops out 30 dB over the noise floor (`WF_MAX_DB`). */
+    const val WF_MAX_DB = 30
+
+    enum class Show { ALL, NO_HB, DIRECTED, GHOSTNET }
+
+    enum class Kind { TX, ALERT, TO_ME, CQ, HEARTBEAT, GROUP, PLAIN }
+
+    fun kind(row: Js8Row): Kind = when {
+        row.transmitting -> Kind.TX
+        GhostNet.isFlash(row) -> Kind.ALERT
+        row.toMe -> Kind.TO_ME
+        row.cq -> Kind.CQ
+        row.heartbeat -> Kind.HEARTBEAT
+        row.group -> Kind.GROUP
+        else -> Kind.PLAIN
+    }
+
+    fun background(kind: Kind): Int = when (kind) {
+        Kind.TX -> ROW_TX
+        Kind.ALERT -> ROW_ALERT
+        Kind.TO_ME -> ROW_TO_ME
+        Kind.CQ -> ROW_CQ
+        Kind.GROUP -> ROW_GROUP
+        Kind.HEARTBEAT, Kind.PLAIN -> PANEL
+    }
+
+    fun foreground(kind: Kind): Int = when (kind) {
+        Kind.ALERT -> ROW_ALERT_TEXT
+        Kind.HEARTBEAT -> MUTE
+        else -> TEXT
+    }
+
+    /** The radio's row, including the bad-checksum tail and the speed letter. */
+    fun line(row: Js8Row): String {
+        val hh = row.utc / 10_000
+        val mm = row.utc / 100 % 100
+        val ss = row.utc % 100
+        val letter = Js8Protocol.submodeLetter(row.submode).let { if (it.isEmpty()) "" else " $it" }
+        if (row.transmitting) {
+            return "%02d:%02d:%02d  TX %4d%s  %s".format(hh, mm, ss, row.freqHz, letter, row.text)
+        }
+        val tail = when {
+            row.partial -> " ..."
+            row.checksum < 0 -> "  (bad checksum)"
+            else -> ""
+        }
+        val open = if (row.lowConfidence) "[" else ""
+        val close = if (row.lowConfidence) "]" else ""
+        return "%02d:%02d:%02d %+3d %4d%s  %s%s%s%s".format(
+            hh, mm, ss, row.snr, row.freqHz, letter, open, row.text, close, tail,
+        )
+    }
+
+    /**
+     * The Show button. Our own transmissions always stay, as they do on the radio.
+     * A heartbeat that is also to us stays in the No HB view.
+     */
+    fun visible(rows: List<Js8Row>, show: Show, region: String): List<Js8Row> {
+        val filtered = when (show) {
+            Show.ALL -> rows
+            Show.GHOSTNET -> GhostNet.filter(rows, region)
+            Show.NO_HB -> rows.filter { it.transmitting || it.toMe || !it.heartbeat }
+            Show.DIRECTED -> rows.filter { row ->
+                row.transmitting || row.toMe || (row.group && !row.heartbeat && !row.cq)
+            }
+        }
+        return filtered
+    }
+
+    fun showName(show: Show): String = when (show) {
+        Show.ALL -> "All"
+        Show.NO_HB -> "No HB"
+        Show.DIRECTED -> "Directed"
+        Show.GHOSTNET -> "GhostNet"
+    }
+
+    /**
+     * The status line the radio puts above the waterfall: the switches that
+     * can transmit on their own, where we are, the speed, and how many
+     * decodes are held. The radio also prints its UTC clock and the time
+     * drift. Those two are not in the `js8` JSON, so they are not invented here.
+     */
+    fun statusLine(status: Js8Status?, count: Int): String {
+        if (status == null) return "No JS8 state from the radio yet."
+        return buildString {
+            if (status.auto) append("AUTO  ")
+            if (status.heartbeat) {
+                append("HB ")
+                append(status.heartbeatMinutes)
+                append("m")
+                if (status.nextSeconds > 0) {
+                    append(" next ")
+                    append(status.nextSeconds)
+                    append("s")
+                }
+                append("  ")
+            }
+            if (status.autoCq) append("auto CQ  ")
+            if (status.hold) append("HOLD  ")
+            if (status.sending) append("TX  ")
+            if (status.where.isNotEmpty()) {
+                append(status.where)
+                append("  ")
+            }
+            append(Js8Protocol.speedName(status.speed))
+            append("  total ")
+            append(count)
+            if (status.selectedCall.isNotEmpty()) {
+                append("  ")
+                append(status.selectedCall)
+            }
+            if (status.text.isNotEmpty()) {
+                append("  ")
+                append(status.text)
+            }
+        }
+    }
+
+    /** True when this row is the station the radio has selected. */
+    fun selected(row: Js8Row, call: String): Boolean {
+        if (call.isEmpty()) return false
+        if (!row.transmitting) return row.from.equals(call, ignoreCase = true)
+        return row.text.startsWith(call, ignoreCase = true) &&
+            (row.text.length == call.length || row.text[call.length] == ' ')
+    }
+}
+
+/**
+ * The FT8 / FT4 / FT2 window is one app. `ft8_window.c` stores the protocol
+ * as 0 FT4, 1 FT8, 2 FT2, and any other value counts as FT2. The tone widths
+ * are the TX marker widths in that file. The list colours are `decode_list.c`:
+ * a call to us is red, our TX is blue, a CQ keeps the panel colour and a
+ * green edge, and the other traffic is grey. A slot line carries the time
+ * that used to sit in front of every row.
+ */
+object Ft8Look {
+    const val TO_ME = 0xFFEF4444.toInt()
+    const val TX = 0xFF0082FC.toInt()
+    const val CQ_EDGE = 0xFF34D399.toInt()
+    const val PANEL = 0xFF13161D.toInt()
+    const val TEXT = 0xFFF1F5F9.toInt()
+    const val MUTE = 0xFF64748B.toInt()
+
+    const val CELL_INFO = 0
+    const val CELL_START = 1
+    const val CELL_MSG = 2
+    const val CELL_CQ = 3
+    const val CELL_TO_ME = 4
+    const val CELL_TX = 5
+
+    const val WORKED_NO = 0
+    const val WORKED_YES = 1
+    const val WORKED_SAME = 2
+
+    /** `ftx_protocol_name` via the index in `ft8_window.c`. */
+    fun protocolName(protocol: Int): String = when (protocol) {
+        0 -> "FT4"
+        1 -> "FT8"
+        else -> "FT2"
+    }
+
+    /** The signal's bandwidth, Hz, for the band-edge check. Same table as the TX marker. */
+    fun toneWidthHz(protocol: Int): Int = when (protocol) {
+        0 -> 83
+        1 -> 50
+        else -> 167
+    }
+
+    /**
+     * "HH:MM:SS" when the row still carries the slot time the radio puts in
+     * front of the text. The list then shows that time once, on its own line.
+     */
+    fun slotTime(text: String): String? {
+        if (text.length <= 9) return null
+        if (text[2] != ':' || text[5] != ':' || text[8] != ' ') return null
+        if (!text[0].isDigit() || !text[1].isDigit()) return null
+        return text.take(8)
+    }
+
+    fun body(text: String): String = if (slotTime(text) != null) text.drop(9) else text
+
+    /** A tap answers a decode. An info row and our own TX do not. */
+    fun canReply(cellType: Int): Boolean =
+        cellType == CELL_MSG || cellType == CELL_CQ || cellType == CELL_TO_ME
+
+    fun statusLine(status: radio.kd0cq.x6100.net.Ft8Status?): String {
+        if (status == null) return "No FT8 state from the radio yet."
+        val name = protocolName(status.protocol)
+        return buildString {
+            append(if (status.open) name else "$name closed")
+            if (status.callingCq) append("  CQ")
+            if (status.transmitting) append("  TX Call")
+            if (status.sending) append("  sending")
+            if (status.autoOn) append("  AUTO")
+            if (status.hold) append("  HOLD")
+            if (status.hound) append("  HOUND")
+            if (status.inQso) append("  QSO")
+            append("  TX ")
+            append(status.txFreqHz)
+            append(" Hz")
+            if (status.slotMs > 0) {
+                val left = (status.slotMs - status.inMs).coerceAtLeast(0) / 1000
+                append("  slot ")
+                append(left)
+                append("s")
+            }
+            if (status.nextMessage.isNotEmpty()) {
+                append("  next ")
+                append(status.nextMessage)
+            }
+        }
+    }
+}
+
+/** One row of the FT8 list after the slot time has been lifted onto its own line. */
+sealed class Ft8Line {
+    data class Slot(val time: String) : Ft8Line()
+    data class Decode(val row: radio.kd0cq.x6100.net.Ft8Row, val body: String) : Ft8Line()
+}
+
+/** Oldest first, newest last, with a slot line wherever the time changes. */
+fun ft8Lines(rows: List<radio.kd0cq.x6100.net.Ft8Row>): List<Ft8Line> {
+    val out = ArrayList<Ft8Line>(rows.size + 4)
+    var last = ""
+    for (row in rows) {
+        val time = Ft8Look.slotTime(row.text)
+        if (time != null && time != last) {
+            out += Ft8Line.Slot(time)
+            last = time
+        }
+        out += Ft8Line.Decode(row, Ft8Look.body(row.text))
+    }
+    return out
+}
+
+/**
+ * Hz marks for an app waterfall whose bins run from [lowHz] to [highHz].
+ * The radio draws a finder line at the TX offset. These are the labelled
+ * ticks under that picture. An empty span has none.
+ */
+fun waterfallTicks(lowHz: Int, highHz: Int): List<Int> {
+    if (highHz <= lowHz) return emptyList()
+    val span = highHz - lowHz
+    val step = when {
+        span > 4_000 -> 1_000
+        span > 1_500 -> 500
+        else -> 250
+    }
+    val start = ((lowHz + step - 1) / step) * step
+    if (start >= highHz) return emptyList()
+    val ticks = ArrayList<Int>()
+    var hz = start
+    while (hz < highHz) {
+        ticks += hz
+        hz += step
+    }
+    return ticks
+}
+
+/** Where [hz] sits across the waterfall, or null when it is outside the span. */
+fun waterfallX(hz: Int, lowHz: Int, highHz: Int, width: Float): Float? {
+    if (highHz <= lowHz || hz < lowHz || hz > highHz || width <= 0f) return null
+    return (hz - lowHz).toFloat() / (highHz - lowHz).toFloat() * width
+}
+
+/**
+ * The WeFax app, as the panel sends it.
+ *
+ * `wefax {...}` is the state. A picture row is binary: u16 0xFFFE, u16 width,
+ * u32 row number, then one grey byte per pixel. There is no transmit command
+ * in the set the panel dispatches. Open, close, auto, cont, save, clear,
+ * plan and unplan change the app and need the operate role plus control.
+ * `wefax rows 1` only asks for the picture.
+ */
+data class WeFaxStatus(
+    val open: Boolean,
+    val auto: Boolean,
+    val fax: Boolean,
+    val transmitting: Boolean,
+    val txPercent: Int,
+    val generation: Long,
+    val rows: Long,
+    val freqHz: Int,
+    val saves: Long,
+    val station: String,
+    val saved: String,
+    val plan: Boolean,
+    val next: String,
+)
+
+/** One grey scan line. [grey] is the pixels the radio sent, left to right. */
+class WeFaxScan(val number: Long, val grey: ByteArray)
+
+object WeFaxProtocol {
+    const val ROWS_KEPT = 480
+
+    val words: Set<String> = setOf("open", "close", "auto", "cont", "save", "clear", "plan", "unplan")
+
+    fun command(word: String): String = "wefax $word"
+
+    fun rows(on: Boolean): String = if (on) "wefax rows 1" else "wefax rows 0"
+
+    fun parse(json: String): WeFaxStatus? {
+        val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        return WeFaxStatus(
+            open = o.on("open"),
+            auto = o.on("auto"),
+            fax = o.on("fax"),
+            transmitting = o.on("tx"),
+            txPercent = o.optInt("txp"),
+            generation = o.optLong("gen"),
+            rows = o.optLong("rows"),
+            freqHz = o.optInt("freq"),
+            saves = o.optLong("saves"),
+            station = o.optString("station"),
+            saved = o.optString("saved"),
+            plan = o.on("plan"),
+            next = o.optString("next"),
+        )
+    }
+
+    /**
+     * What the status line on the radio's frame says, from the fields the
+     * JSON actually carries. The picture itself is the grey rows.
+     */
+    fun statusLine(status: WeFaxStatus?): String {
+        if (status == null) return "No WeFax state from the radio yet."
+        return buildString {
+            append(if (status.open) "WeFax open" else "WeFax closed")
+            if (status.auto) append("  Auto")
+            if (status.fax) append("  fax")
+            if (status.transmitting) {
+                append("  TX ")
+                append(status.txPercent)
+                append("%")
+            }
+            if (status.plan) append("  Plan")
+            if (status.station.isNotEmpty()) {
+                append("  ")
+                append(status.station)
+            }
+            if (status.freqHz != 0) {
+                append("  ")
+                append(status.freqHz)
+                append(" Hz")
+            }
+            append("  ")
+            append(status.rows)
+            append(" rows")
+            if (status.next.isNotEmpty()) {
+                append("  next ")
+                append(status.next)
+            }
+            if (status.saved.isNotEmpty()) {
+                append("  saved ")
+                append(status.saved)
+            }
+        }
     }
 }
 

@@ -228,6 +228,14 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                 pickingModes = false
                 onNavigate("js8")
             },
+            onCw = {
+                pickingModes = false
+                onNavigate("cw")
+            },
+            onWeFax = {
+                pickingModes = false
+                onNavigate("wefax")
+            },
             onPending = { pending = it },
             onDismiss = { pickingModes = false },
         )
@@ -785,6 +793,8 @@ private fun ModeDialog(
     onMode: (Int) -> Unit,
     onFt8: () -> Unit,
     onJs8: () -> Unit,
+    onCw: () -> Unit,
+    onWeFax: () -> Unit,
     onPending: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -804,8 +814,10 @@ private fun ModeDialog(
                         )
                     }
                 }
-                TextButton(onClick = onFt8) { Text("FT8 decoder", color = RfGuru.goldText) }
+                TextButton(onClick = onFt8) { Text("FT8 / FT4", color = RfGuru.goldText) }
                 TextButton(onClick = onJs8) { Text("JS8 / GhostNet", color = RfGuru.goldText) }
+                TextButton(onClick = onCw) { Text("CW decoder", color = RfGuru.goldText) }
+                TextButton(onClick = onWeFax) { Text("WeFax", color = RfGuru.goldText) }
                 Text("Not on the Panel link yet", color = RfGuru.mute, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 RadioFace.pendingDigitalModes.forEach { name ->
                     TextButton(onClick = { onPending(name) }) { Text(name, color = RfGuru.mute) }

@@ -21,11 +21,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import radio.kd0cq.x6100.discovery.FoundRadio
 import radio.kd0cq.x6100.discovery.RadioDiscovery
+import radio.kd0cq.x6100.digital.Ft8Look
 import radio.kd0cq.x6100.digital.GhostNet
 import radio.kd0cq.x6100.digital.Js8Protocol
 import radio.kd0cq.x6100.digital.Js8Row
 import radio.kd0cq.x6100.digital.Js8Status
 import radio.kd0cq.x6100.digital.UsAdvanced
+import radio.kd0cq.x6100.digital.WeFaxProtocol
+import radio.kd0cq.x6100.digital.WeFaxScan
+import radio.kd0cq.x6100.digital.WeFaxStatus
 import radio.kd0cq.x6100.net.AppWaterfallFrame
 import radio.kd0cq.x6100.net.Band
 import radio.kd0cq.x6100.net.ControlInfo
@@ -105,7 +109,9 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     val ft8Status: StateFlow<Ft8Status?> = link.ft8Status
     val js8Rows: StateFlow<List<Js8Row>> = link.js8Rows
     val js8Status: StateFlow<Js8Status?> = link.js8Status
-    val js8Waterfall: StateFlow<List<AppWaterfallFrame>> = link.js8Waterfall
+    val appWaterfall: StateFlow<List<AppWaterfallFrame>> = link.appWaterfall
+    val wefax: StateFlow<WeFaxStatus?> = link.wefax
+    val wefaxRows: StateFlow<List<WeFaxScan>> = link.wefaxRows
     val js8NeedsFirmware: StateFlow<Boolean> = link.js8NeedsFirmware
     val cwLines: StateFlow<List<String>> = link.cwLines
     val receipts: StateFlow<List<LoggedReceipt>> = link.receipts
@@ -348,17 +354,83 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
         send(PanelCommands.logq(id, fields.filter { it.isNotBlank() }.joinToString("|")))
     }
 
-    /** The FT8 app's switches, one command each. */
-    fun ft8(what: String, arg: String? = null) = send(PanelCommands.ft8(what, arg))
+    /**
+     * Ask the radio for the FT8 app waterfall, or stop asking.
+     *
+     * The radio uses the same client flag for `ft8 wf` and `js8 wf`. Opening
+     * this screen clears the shared picture so the previous mode's rows are
+     * not drawn as this one. It does not send `ft8 open` and it does not
+     * transmit. The radio does not require a role for `ft8 wf`.
+     */
+    fun ft8Watch(on: Boolean) {
+        if (on) link.clearAppWaterfall()
+        send(PanelCommands.ft8("wf", if (on) "1" else "0"))
+    }
+
+    /**
+     * Open, close, stop, hold, mode, or txfreq. Returns false, and sends
+     * nothing, until this session may operate and holds control. A transmit
+     * word is refused here, including a CQ that would turn the transmitter on.
+     */
+    fun ft8Operate(line: String): Boolean {
+        if (!ft8LineIsOperate(line)) return false
+        if (!holdingControls()) return false
+        send(line)
+        return true
+    }
+
+    /**
+     * CQ, auto, reply, or TX Call, when [enabling] is the direction that puts
+     * the transmitter to work. Turning one of those off (the radio's command
+     * is the same word) still needs control, and it does not need the band
+     * check: an offset that is already wrong must not trap the transmitter on.
+     * Returns the reason nothing was sent, or null when the line went out.
+     */
+    fun ft8Transmit(line: String, enabling: Boolean): String? {
+        if (!ft8LineIsTransmit(line)) return "That is not an FT8 transmit."
+        if (!enabling) {
+            if (!holdingControls()) return "Take control before this."
+            send(line)
+            return null
+        }
+        val reason = ft8TransmitReason()
+        if (reason != null) return reason
+        send(line)
+        return null
+    }
+
+    fun ft8TransmitBlocked(): String? = ft8TransmitReason()
 
     /**
      * Ask the radio for the JS8 waterfall, or stop asking.
      *
      * This is the only JS8 line the screen sends by itself, and only because the
      * screen was opened or left. It does not open the JS8 app and it does not
-     * transmit. The radio does not require a role for "js8 wf".
+     * transmit. The radio does not require a role for "js8 wf". Turning it on
+     * clears the shared app waterfall first.
      */
-    fun js8Watch(on: Boolean) = send(Js8Protocol.waterfall(on))
+    fun js8Watch(on: Boolean) {
+        if (on) link.clearAppWaterfall()
+        send(Js8Protocol.waterfall(on))
+    }
+
+    /**
+     * Ask for WeFax scan lines, or stop. This does not open the app and it
+     * does not transmit. The radio does not require a role for `wefax rows`.
+     */
+    fun wefaxWatch(on: Boolean) = send(WeFaxProtocol.rows(on))
+
+    /**
+     * Open, close, auto, cont, save, clear, plan, or unplan. None of these is
+     * a transmit command in the panel set. Each still needs operate and control,
+     * because the radio refuses them otherwise. Returns false when nothing was sent.
+     */
+    fun wefaxOperate(word: String): Boolean {
+        if (word !in WeFaxProtocol.words) return false
+        if (!holdingControls()) return false
+        send(WeFaxProtocol.command(word))
+        return true
+    }
 
     /**
      * A JS8 command that does not transmit: open, close, hold, speed, stop,
@@ -396,20 +468,36 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     private fun holdingControls(): Boolean = control.value.mine && role.value.canOperate
 
     private fun js8TransmitReason(): String? {
-        if (!holdingControls()) return "Take control before transmitting."
-        if (!role.value.txAllowed) return "This session is not allowed to transmit."
-        val dial = state.value?.freqHz ?: return "The radio has not reported a dial frequency yet."
-        // A missing state line is not an offset of 0. Guessing 0 could put the tones
-        // outside the segment the operator can see.
-        val js8 = js8Status.value ?: return "The radio has not reported the JS8 transmit offset yet."
-        val offset = js8.txFreqHz
-        val width = Js8Protocol.toneWidthHz(js8.speed)
-        val low = dial.toLong() + offset
-        val high = low + width
-        if (!UsAdvanced.dataCovers(low, high)) {
-            return "That signal ($low–$high Hz) is outside the US Advanced data segments."
-        }
-        return null
+        val js8 = js8Status.value
+        return UsAdvanced.refuseTransmit(
+            holdingControls = holdingControls(),
+            txAllowed = role.value.txAllowed,
+            dialHz = state.value?.freqHz?.toLong(),
+            offsetHz = js8?.txFreqHz,
+            widthHz = Js8Protocol.toneWidthHz(js8?.speed ?: 0),
+            offsetName = "JS8 transmit offset",
+        )
+    }
+
+    private fun ft8TransmitReason(): String? {
+        val ft8 = ft8Status.value
+        return UsAdvanced.refuseTransmit(
+            holdingControls = holdingControls(),
+            txAllowed = role.value.txAllowed,
+            dialHz = state.value?.freqHz?.toLong(),
+            offsetHz = ft8?.txFreqHz,
+            widthHz = Ft8Look.toneWidthHz(ft8?.protocol ?: 1),
+            offsetName = "FT8 transmit offset",
+        )
+    }
+
+    private fun ft8Word(line: String): String = line.trim().removePrefix("ft8 ").substringBefore(' ')
+
+    private fun ft8LineIsTransmit(line: String): Boolean = ft8Word(line) in FT8_TRANSMIT
+
+    private fun ft8LineIsOperate(line: String): Boolean {
+        val word = ft8Word(line)
+        return word in FT8_OPERATE && word !in FT8_TRANSMIT
     }
 
     private fun js8Word(line: String): String = line.trim().removePrefix("js8 ").substringBefore(' ')
@@ -469,5 +557,11 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
         /** Words that change the app and do not transmit. Waterfall is [js8Watch], not this set. */
         val JS8_OPERATE = setOf("open", "close", "hold", "speed", "stop", "select", "txfreq")
+
+        /** CQ, auto (it answers), a reply, and TX Call. `ft8 mode` is not one of these. */
+        val FT8_TRANSMIT = setOf("cq", "auto", "reply", "txcall")
+
+        /** Words that change the FT8 app and do not start a transmission. */
+        val FT8_OPERATE = setOf("open", "close", "stop", "hold", "mode", "txfreq")
     }
 }

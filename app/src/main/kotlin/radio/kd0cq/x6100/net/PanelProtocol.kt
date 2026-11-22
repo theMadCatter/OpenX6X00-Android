@@ -454,6 +454,12 @@ sealed class PanelEvent {
     /** The 0xFFFD app waterfall. It rides its own lane so it cannot replace a spectrum frame. */
     data class AppWaterfall(val frame: AppWaterfallFrame) : PanelEvent()
 
+    /** "wefax {...}". The picture rows are [WeFaxRow], on their own lane. */
+    data class WeFax(val status: radio.kd0cq.x6100.digital.WeFaxStatus) : PanelEvent()
+
+    /** One grey scan line, magic 0xFFFE. Not a JPEG and not the app waterfall. */
+    data class WeFaxRow(val row: radio.kd0cq.x6100.digital.WeFaxScan) : PanelEvent()
+
     /** The CW decoder's text, one line per decode. */
     data class Cw(val text: String) : PanelEvent()
     data class Logged(val receipt: LoggedReceipt) : PanelEvent()
@@ -481,6 +487,9 @@ object PanelProtocol {
     private const val SPECTRUM_HEADER = 16
     private const val APP_WATERFALL_MAGIC = 0xFFFD
     private const val APP_WATERFALL_HEADER = 8
+    private const val WEFAX_MAGIC = 0xFFFE
+    private const val WEFAX_HEADER = 8
+    private const val WEFAX_MAX_WIDTH = 4096
     private const val SCREEN_HEADER = 8
 
     /** One text message, or null when the radio said something we do not know yet. */
@@ -508,6 +517,7 @@ object PanelProtocol {
             "ft8" -> parseFt8Status(rest)
             "js8r" -> radio.kd0cq.x6100.digital.Js8Protocol.parseRow(rest)?.let { PanelEvent.DecodedJs8(it) }
             "js8" -> radio.kd0cq.x6100.digital.Js8Protocol.parseStatus(rest)?.let { PanelEvent.Js8(it) }
+            "wefax" -> radio.kd0cq.x6100.digital.WeFaxProtocol.parse(rest)?.let { PanelEvent.WeFax(it) }
             "cw" -> parseCw(rest)
             "logged" -> parseLogged(rest)
             "role" -> parseRole(rest)
@@ -749,13 +759,15 @@ object PanelProtocol {
 
     /**
      * A binary frame: the receiver spectrum (0xFFFF), the JS8/FT8 app waterfall
-     * (0xFFFD), or a screen JPEG. The app waterfall is tried before the screen.
-     * Its first bins can be 0xFF 0xD8, which is also how a JPEG starts, and the
-     * magic would otherwise be read as a screen width.
+     * (0xFFFD), a WeFax scan line (0xFFFE), or a screen JPEG. The app waterfall
+     * is tried before the screen. Its first bins can be 0xFF 0xD8, which is
+     * also how a JPEG starts, and the magic would otherwise be read as a
+     * screen width. The fax line is the same kind of collision.
      */
     fun parseBinary(bytes: ByteArray): PanelEvent? =
         parseSpectrum(bytes)?.let { PanelEvent.Spectrum(it) }
             ?: parseAppWaterfall(bytes)?.let { PanelEvent.AppWaterfall(it) }
+            ?: parseWeFax(bytes)?.let { PanelEvent.WeFaxRow(it) }
             ?: parseScreenFrame(bytes)?.let { PanelEvent.Screen(it) }
 
     /**
@@ -773,6 +785,23 @@ object PanelProtocol {
         val db = ByteArray(bins)
         buf.get(db)
         return AppWaterfallFrame(bins, lowHz, highHz, db)
+    }
+
+    /**
+     * One WeFax scan line: 8 bytes LE {u16 0xFFFE, u16 width, u32 row number},
+     * then one grey byte per pixel. A short payload is not a line. A width
+     * past 4096 is not a line either: the radio's chart is 1809 pixels wide.
+     */
+    fun parseWeFax(bytes: ByteArray): radio.kd0cq.x6100.digital.WeFaxScan? {
+        if (bytes.size < WEFAX_HEADER) return null
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if ((buf.short.toInt() and 0xFFFF) != WEFAX_MAGIC) return null
+        val width = buf.short.toInt() and 0xFFFF
+        val number = buf.int.toLong() and 0xFFFFFFFFL
+        if (width <= 0 || width > WEFAX_MAX_WIDTH || bytes.size - WEFAX_HEADER < width) return null
+        val grey = ByteArray(width)
+        buf.get(grey)
+        return radio.kd0cq.x6100.digital.WeFaxScan(number, grey)
     }
 
     /** The waterfall's FFT: a 16-byte header with 0xFFFF, bins, centre, width, sequence, then int8 dB. */

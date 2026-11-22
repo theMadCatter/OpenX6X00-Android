@@ -17,6 +17,9 @@ import radio.kd0cq.x6100.core.PairingController
 import radio.kd0cq.x6100.digital.Js8Protocol
 import radio.kd0cq.x6100.digital.Js8Row
 import radio.kd0cq.x6100.digital.Js8Status
+import radio.kd0cq.x6100.digital.WeFaxProtocol
+import radio.kd0cq.x6100.digital.WeFaxScan
+import radio.kd0cq.x6100.digital.WeFaxStatus
 
 /** One connection to one radio: where it came from, and where its two servers answered. */
 data class RadioConnection(
@@ -123,10 +126,16 @@ class RadioLink(
     /** The JS8 app's switches, offsets and note. Null until the radio has sent a `js8` line. */
     val js8Status: StateFlow<Js8Status?> = _js8Status.asStateFlow()
 
-    private val _js8Waterfall = MutableStateFlow<List<AppWaterfallFrame>>(emptyList())
+    private val _appWaterfall = MutableStateFlow<List<AppWaterfallFrame>>(emptyList())
 
-    /** App-waterfall lines, oldest first, while the JS8 screen has asked for them. */
-    val js8Waterfall: StateFlow<List<AppWaterfallFrame>> = _js8Waterfall.asStateFlow()
+    /**
+     * App-waterfall lines, oldest first.
+     *
+     * The radio has one `appwf` flag for both `ft8 wf` and `js8 wf`. The phone
+     * keeps one buffer and the screen that is open is the one that asked.
+     * Opening either screen clears it, so FT4 rows are not drawn as JS8.
+     */
+    val appWaterfall: StateFlow<List<AppWaterfallFrame>> = _appWaterfall.asStateFlow()
 
     private val _js8NeedsFirmware = MutableStateFlow(false)
 
@@ -143,10 +152,25 @@ class RadioLink(
      * The CW decoder's text, newest last.
      *
      * The scope does not paint this. A line of decode along the bottom of every
-     * layout covered the band plan and the last waterfall rows. The lines stay
-     * here so a decoder surface can read them; the spectrum layouts do not.
+     * layout covered the band plan and the last waterfall rows. The CW screen
+     * reads these lines. The spectrum layouts still do not.
      */
     val cwLines: StateFlow<List<String>> = _cwLines.asStateFlow()
+
+    private val _wefax = MutableStateFlow<WeFaxStatus?>(null)
+
+    /** The WeFax app's state. Null until the radio has sent a `wefax` line. */
+    val wefax: StateFlow<WeFaxStatus?> = _wefax.asStateFlow()
+
+    private val _wefaxRows = MutableStateFlow<List<WeFaxScan>>(emptyList())
+
+    /**
+     * Grey scan lines, oldest first, while the WeFax screen has asked for them.
+     * A new generation, or a line of a different width, starts the picture over.
+     */
+    val wefaxRows: StateFlow<List<WeFaxScan>> = _wefaxRows.asStateFlow()
+
+    private var wefaxGeneration = Long.MIN_VALUE
 
     private val _receipts = MutableStateFlow<List<LoggedReceipt>>(emptyList())
 
@@ -219,6 +243,7 @@ class RadioLink(
         collectPanel()
         collectFrames()
         collectAppFrames()
+        collectFaxFrames()
         collectTci()
         watchPhases()
     }
@@ -317,9 +342,18 @@ class RadioLink(
                         _js8NeedsFirmware.value = false
                     }
                     is PanelEvent.Cw -> _cwLines.value = (_cwLines.value + event.text).takeLast(CW_LINES_KEPT)
+                    is PanelEvent.WeFax -> {
+                        if (event.status.generation != wefaxGeneration) {
+                            wefaxGeneration = event.status.generation
+                            _wefaxRows.value = emptyList()
+                        }
+                        _wefax.value = event.status
+                    }
                     is PanelEvent.Logged -> _receipts.value = (_receipts.value + event.receipt).takeLast(RECEIPTS_KEPT)
                     is PanelEvent.Sessions -> _sessions.value = event.sessions
-                    is PanelEvent.Spectrum, is PanelEvent.Screen, is PanelEvent.AppWaterfall -> Unit
+                    is PanelEvent.Spectrum, is PanelEvent.Screen, is PanelEvent.AppWaterfall,
+                    is PanelEvent.WeFaxRow,
+                    -> Unit
                     is PanelEvent.Paired -> {
                         _lastAnswer.value = "paired as ${event.role.wire}"
                         _role.value = RoleInfo(event.role, event.txAllowed, _role.value.sessionName)
@@ -359,7 +393,25 @@ class RadioLink(
         scope.launch {
             panel.appFrames.collect { event ->
                 if (event is PanelEvent.AppWaterfall) {
-                    _js8Waterfall.value = (_js8Waterfall.value + event.frame).takeLast(JS8_WF_ROWS)
+                    _appWaterfall.value = (_appWaterfall.value + event.frame).takeLast(APP_WF_ROWS)
+                }
+            }
+        }
+    }
+
+    /** The screen that is about to ask for a waterfall starts from an empty picture. */
+    fun clearAppWaterfall() {
+        _appWaterfall.value = emptyList()
+    }
+
+    private fun collectFaxFrames() {
+        scope.launch {
+            panel.faxFrames.collect { event ->
+                if (event is PanelEvent.WeFaxRow) {
+                    val row = event.row
+                    val current = _wefaxRows.value
+                    val sameWidth = current.firstOrNull()?.grey?.size == row.grey.size
+                    _wefaxRows.value = (if (sameWidth) current + row else listOf(row)).takeLast(WeFaxProtocol.ROWS_KEPT)
                 }
             }
         }
@@ -392,7 +444,7 @@ class RadioLink(
     private companion object {
         const val FT8_ROWS_KEPT = 48
         const val JS8_ROWS_KEPT = Js8Protocol.ROWS_KEPT
-        const val JS8_WF_ROWS = 96
+        const val APP_WF_ROWS = 96
         const val CW_LINES_KEPT = 64
         const val RECEIPTS_KEPT = 20
     }

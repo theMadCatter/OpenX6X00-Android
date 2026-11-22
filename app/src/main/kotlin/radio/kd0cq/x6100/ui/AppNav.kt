@@ -53,8 +53,10 @@ import androidx.navigation.compose.rememberNavController
 import radio.kd0cq.x6100.ui.face.RadioFace
 import radio.kd0cq.x6100.ui.face.RadioIcons
 import radio.kd0cq.x6100.ui.screens.ConnectScreen
+import radio.kd0cq.x6100.ui.screens.CwScreen
 import radio.kd0cq.x6100.ui.screens.Ft8Screen
 import radio.kd0cq.x6100.ui.screens.Js8Screen
+import radio.kd0cq.x6100.ui.screens.WeFaxScreen
 import radio.kd0cq.x6100.ui.screens.LogScreen
 import radio.kd0cq.x6100.ui.screens.PairingScreen
 import radio.kd0cq.x6100.ui.screens.RadioScreen
@@ -219,6 +221,12 @@ private fun androidx.navigation.NavGraphBuilder.screens(nav: NavHostController, 
     }
     composable("js8") {
         Js8Screen(viewModel, onBack = { nav.popBackStack() })
+    }
+    composable("wefax") {
+        WeFaxScreen(viewModel, onBack = { nav.popBackStack() })
+    }
+    composable("cw") {
+        CwScreen(viewModel, onBack = { nav.popBackStack() })
     }
     composable(Route.SPOTS.path) { SpotsScreen(viewModel) }
     composable(Route.LOG.path) { LogScreen(viewModel) }
