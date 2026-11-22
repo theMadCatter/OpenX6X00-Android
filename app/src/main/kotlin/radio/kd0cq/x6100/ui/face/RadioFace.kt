@@ -608,40 +608,26 @@ object RadioFace {
     }
 
     /**
-     * A quiet band's int8 bins sit in a few dB around −110. Painting them on the full −128..0 scale
-     * leaves noise and weak signals in the same near-black stop, which is the flat navy waterfall.
-     * The window is at least this many dB, starting at the noise percentile, so that slice uses the
-     * whole ramp.
+     * The smallest window [waterfallArgb] will paint. The radio's own ramp is 48 dB
+     * (dsp.cpp COLOUR_RANGE), which is already wider than this.
      */
     const val WATERFALL_MIN_SPAN_DB = 36
 
     /**
-     * Floor and ceiling for [waterfallArgb]. Floor is the 8th percentile (the noise, not one empty
-     * bin). Ceiling is the strong end of the frame, and never closer than [WATERFALL_MIN_SPAN_DB],
-     * so one carrier cannot squash the noise back to a single colour.
+     * Floor and ceiling for one waterfall row, before the tracker eases them.
+     *
+     * This is auto_levels() on the bins the Panel sent: the grouped noise floor, then
+     * 5 dB under it, then 48 dB of colour. One carrier does not move the floor, and the
+     * window is never tighter than [WATERFALL_MIN_SPAN_DB].
      */
     fun waterfallWindow(rows: List<ByteArray>): Pair<Int, Int> {
-        val hist = IntArray(256)
-        var count = 0
-        for (row in rows) {
-            for (sample in row) {
-                hist[(sample.toInt() + 128).coerceIn(0, 255)]++
-                count++
-            }
-        }
-        if (count == 0) return -120 to (-120 + WATERFALL_MIN_SPAN_DB)
-        fun percentile(fraction: Float): Int {
-            val target = ((count - 1) * fraction).toInt().coerceIn(0, count - 1)
-            var seen = 0
-            for (bin in 0..255) {
-                seen += hist[bin]
-                if (seen > target) return bin - 128
-            }
-            return 127
-        }
-        val floor = percentile(0.08f)
-        val peak = percentile(0.995f)
-        return floor to maxOf(peak, floor + WATERFALL_MIN_SPAN_DB)
+        val row = rows.lastOrNull { it.isNotEmpty() } ?: return -120 to (-120 + WATERFALL_MIN_SPAN_DB)
+        val groups = FloatArray(row.size / FirmwareLook.FLOOR_GROUP + 1)
+        val noise = FirmwareLook.noiseFloorDb(row, row.size, groups)
+        val (min, max) = FirmwareLook.colourWindow(if (noise.isNaN()) -120f else noise)
+        val floor = min.roundToInt()
+        val ceiling = max.roundToInt()
+        return floor to maxOf(ceiling, floor + WATERFALL_MIN_SPAN_DB)
     }
 
     /**

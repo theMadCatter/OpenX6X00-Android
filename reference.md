@@ -404,3 +404,21 @@ A separate alert fires when `bat` is at or under the Setup percent, and when the
 ## What this pass found
 
 `pos`, `clk`, and `js8` are not in `remote_server.c`. Those screens store the choice and do not write the socket. Spot labels, `log`/`logq`, `ft8 reply`, `set`/`key`/`knob`, `bat`, the `t` meter, and `spots` are real. The sunlight face and the meter styles are paint. Digit entry still ends in `set freq`.
+
+## Spectrum and waterfall matched to the radio
+
+Firmware studied: Guru-RF/OpenX6X00 `main` at `69f950291bafe8bbefad3e599d2d37abc5c28f3c` (2026-11-21). Release `v0.3.13` is 31 commits behind that, and `spectrum_view.c`, `waterfall_view.c`, and `dsp.cpp` are among the files that moved, so the match is to main, not to the tag. Drawing lives in those three plus `dsp_math.h`, `wf_palettes.c`, `theme.h`, `theme.c`, `freq_scale.c`, `gui_styles.c`, `smeter.h`, and the defaults in `settings_manager.h` / `params.c`.
+
+What the RF.Guru defaults actually draw, and what the phone does now:
+
+- Spectrum fill is on, the gradient and the fill-by-level are off, and the fill colour is the theme line `#94A3B8`. The trace is solid columns of that colour from the line to the bottom of the spectrum, one sample per screen pixel. The old white gradient and 1.5 px white stroke are gone.
+- Peaks are on: 5 s hold, then 0.5 dB down per frame, colour `#475569`, drawn under the fill so only the part still above the trace shows. A tune slides them with the view. Transmit freezes them. The vertical scale in transmit is S4..S9+20.
+- The spectrum the DSP smooths (0.6 up, 0.2 down) is a separate FFT, `SPECTRUM_NFFT` = the panel width. The socket sends the waterfall's 1024 int8 bins. Those bins get the same two coefficients, and they slide by whole bins when the centre moves.
+- Colour window, shared by the 2D waterfall and the 2D trace: noise is the 25th percentile of 8-bin power groups, 4% dropped at each end; a tracker takes the first reading whole, follows quickly for a second, then rises with a 4 s constant and falls with a 2 s constant. Black starts 5 dB under that floor. The ramp is 48 dB. The floor is clamped to S_MIN..S8. A tune farther than the span resets the tracker. Gauss stays the default palette; the tables were already the firmware's.
+- Passband: screen background `#08090C` at LV_OPA_50 over the spectrum, VFO red `#FF2020` at LV_OPA_20 over the waterfall. The VFO marker is 3 px in that red. The spectrum hides it in CW and CW-R. The waterfall keeps it.
+- Frequency ticks already included both edges. Each interior tick now continues as a 4-on/4-off dash down the waterfall, in the text colour at LV_OPA_40.
+- 3D Aether and FT-710 keep their height and their own colours. Their floor uses the same grouped noise estimate, so one carrier does not lift the lawn. The radio's 3D range is 40 dB and its default 3D colours are blue/green/yellow/red; using either would flatten the carrier the grass tests require and would replace the two styles. The history ring, the layouts, and the spot labels are unchanged.
+
+`./gradlew testDebugUnitTest assembleDebug` after this: 221 tests, 0 failures. Assemble succeeded. This was not re-shot on a device.
+
+Not on the wire, so not drawn: the separate spectrum FFT, waterfall speeds other than the default 15 lines/s, the Fixed-mode dimmed side trace, the notch, the RTTY/NAVTEX/WEFAX tone lines, a red marker while the recorder is on, and the DRM-plane Wu plot (Compose's stroke is the antialiasing). Auto level is the default; the manual −121..−73 grid is not sent as its own scale.

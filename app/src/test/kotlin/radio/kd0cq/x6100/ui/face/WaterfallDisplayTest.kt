@@ -130,7 +130,7 @@ class WaterfallDisplayTest {
         // Half the bins up at −40, so the strong percentile actually moves. One bin would
         // sit past the 99.5th and the window would not notice it.
         val loud = ByteArray(80) { index -> if (index < 40) (-108).toByte() else (-40).toByte() }
-        val leveler = WaterfallLeveler(follow = 0.2f)
+        val leveler = WaterfallLeveler()
         val (floor, ceiling) = leveler.update(quiet)
         assertTrue(ceiling - floor >= RadioFace.WATERFALL_MIN_SPAN_DB)
         val (nextFloor, nextCeiling) = leveler.update(loud)

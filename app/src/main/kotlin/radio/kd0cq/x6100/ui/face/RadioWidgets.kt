@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
@@ -94,6 +95,7 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.flow.StateFlow
+import radio.kd0cq.x6100.net.PanelMode
 import radio.kd0cq.x6100.net.PlanSegment
 import radio.kd0cq.x6100.net.RadioState
 import radio.kd0cq.x6100.net.SpectrumFrame
@@ -643,6 +645,11 @@ fun SpectrumStack(
     val ridgeVeil = remember { Path() }
     val ridgeScratch = remember { RidgeScratch() }
     val leveler = remember { WaterfallLeveler() }
+    // The smoothed trace and the peaks. Remembered with the pane so a recomposition
+    // does not draw the raw frame, and a rotation starts from the next frame rather
+    // than from a trace that belonged to a different pixel width.
+    val spectrumTrace = remember { SpectrumTrace() }
+    val gridDash = remember { PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f) }
     val sheet = remember { WaterfallSheet() }
     var tick by remember { mutableIntStateOf(0) }
     var mapName by rememberSaveable { mutableStateOf(WfColormap.GAUSS.name) }
@@ -665,6 +672,15 @@ fun SpectrumStack(
         if (!drawScope) return@LaunchedEffect
         val current = frame ?: return@LaunchedEffect
         history.push(current.db, current.centreHz, current.widthHz)
+        // The 2D trace is smoothed here, once per frame. Draw only reads it.
+        spectrumTrace.accept(
+            current.db,
+            current.bins,
+            current.centreHz,
+            current.widthHz,
+            System.currentTimeMillis(),
+            state?.transmitting == true,
+        )
         // The range includes this frame, then the ring bakes the levels with it.
         // Later draws read that bake. They do not reshape the row when the floor moves.
         // The same sequence is ignored, so coming back to this pane does not scroll.
@@ -674,8 +690,14 @@ fun SpectrumStack(
     val rows = remember(tick) { history.snapshot() }
     // The window eases toward the newest row. Taking the percentile of the whole history, or
     // replacing it every frame, is what made a quiet band shimmer.
-    val window = remember(tick) {
-        rows.firstOrNull()?.db?.let { leveler.update(it) } ?: (leveler.floor to leveler.ceiling)
+    val window = remember(tick, state?.transmitting, frame?.centreHz, frame?.widthHz) {
+        if (state?.transmitting == true) {
+            FirmwareLook.TX_MIN.roundToInt() to FirmwareLook.TX_MAX.roundToInt()
+        } else {
+            rows.firstOrNull()?.db?.let {
+                leveler.update(it, frame?.centreHz ?: 0, frame?.widthHz ?: 0)
+            } ?: (leveler.floor to leveler.ceiling)
+        }
     }
     // Painted at the view's pixel width, one history row per pixel. Not inside draw: drawImage
     // holds the bitmap until the frame is presented, and recycling it there blanks the waterfall.
@@ -807,37 +829,48 @@ fun SpectrumStack(
                     viewWidthHz = spectrumFrame.widthHz,
                 )
             } else {
-                // One sample about every two pixels, linearly between bins, so a 1024-bin FFT
-                // does not draw as 1024 rectangles. The fill fades from the line down to the
-                // background, which is how the radio draws a filled trace.
-                val samples = (size.width / 2f).toInt().coerceIn(64, 900)
-                val dbSpan = (window.second - window.first).coerceAtLeast(1).toFloat()
-                val outline = Path()
+                // RF.Guru's default spectrum (spectrum_view.c, fill on, gradient off, fill-by-level
+                // off). One sample per screen pixel, which is the radio's POINTS. The peak line is
+                // drawn first. The solid line-coloured fill then covers it up to the trace, so a
+                // held peak shows only where it still stands above the signal. Strokes are raw
+                // pixels, so the edge stays a hairline at the phone's density.
+                drawRect(packedArgb(FirmwareLook.PANEL), size = Size(size.width, specH))
+                val samples = size.width.roundToInt().coerceIn(2, 4096)
+                val minDb = window.first.toFloat()
+                val maxDb = window.second.toFloat()
+                val peakLine = Path()
+                val fill = Path()
+                var drew = false
                 for (i in 0 until samples) {
+                    val x = i * size.width / (samples - 1).toFloat()
                     val hz = WaterfallDisplay.hzAtPixel(i, samples, spectrumFrame.centreHz, spectrumFrame.widthHz)
-                    val index = WaterfallDisplay.binAtHz(hz, spectrumFrame.centreHz, spectrumFrame.widthHz, spectrumFrame.bins)
-                    val db = WaterfallDisplay.sampleBin(spectrumFrame.db, index) ?: window.first.toFloat()
-                    val v = ((db - window.first) / dbSpan).coerceIn(0f, 1f)
-                    val x = if (samples == 1) 0f else i * size.width / (samples - 1).toFloat()
-                    val y = specH * (1f - v * 0.92f)
-                    if (i == 0) outline.moveTo(x, y) else outline.lineTo(x, y)
+                    val index = WaterfallDisplay.binAtHz(
+                        hz, spectrumFrame.centreHz, spectrumFrame.widthHz, spectrumTrace.length,
+                    )
+                    val db = spectrumTrace.levelAt(index) ?: minDb
+                    val peak = spectrumTrace.peakAt(index) ?: db
+                    val y = FirmwareLook.traceY(db, minDb, maxDb, specH)
+                    val py = FirmwareLook.traceY(peak, minDb, maxDb, specH)
+                    if (!drew) {
+                        peakLine.moveTo(x, py)
+                        fill.moveTo(x, y)
+                        drew = true
+                    } else {
+                        peakLine.lineTo(x, py)
+                        fill.lineTo(x, y)
+                    }
                 }
-                val fill = Path().apply {
-                    addPath(outline)
-                    lineTo(size.width, specH)
-                    lineTo(0f, specH)
-                    close()
+                if (drew) {
+                    drawPath(
+                        peakLine,
+                        packedArgb(FirmwareLook.PEAK),
+                        style = Stroke(width = 1f, cap = StrokeCap.Butt, join = StrokeJoin.Round),
+                    )
+                    fill.lineTo(size.width, specH)
+                    fill.lineTo(0f, specH)
+                    fill.close()
+                    drawPath(fill, packedArgb(FirmwareLook.LINE))
                 }
-                drawPath(
-                    fill,
-                    Brush.verticalGradient(
-                        0f to Color(0xCCF1F5F9),
-                        1f to Color(0x0008090C),
-                        startY = 0f,
-                        endY = specH.coerceAtLeast(1f),
-                    ),
-                )
-                drawPath(outline, Color(0xFFF1F5F9), style = Stroke(width = 1.5f))
             }
 
             if (waterfall != null && waterH > 1f) {
@@ -869,6 +902,16 @@ fun SpectrumStack(
                 ticks.indices.forEach { i ->
                     val x = centers[i]
                     drawLine(RfGuru.mute, Offset(x, specH), Offset(x, specH + scaleH), strokeWidth = 1f)
+                    // freq_scale.c: a 4 px dash, 4 px gap, down the waterfall at each reference.
+                    if (waterH > 1f) {
+                        drawLine(
+                            packedArgb(FirmwareLook.GRID).copy(alpha = FirmwareLook.GRID_OPA / 255f),
+                            Offset(x, waterTop),
+                            Offset(x, waterTop + waterH),
+                            strokeWidth = 1f,
+                            pathEffect = gridDash,
+                        )
+                    }
                     val left = lefts[i] ?: return@forEach
                     drawText(measured[i], topLeft = Offset(left, specH + 1f))
                 }
@@ -894,13 +937,39 @@ fun SpectrumStack(
                     val x1 = RadioFace.fractionForHz(hi, hzSpan) * size.width
                     val bandLeft = minOf(x0, x1).coerceIn(0f, size.width)
                     val bandRight = maxOf(x0, x1).coerceIn(0f, size.width)
-                    drawRect(
-                        packedArgb(RadioFace.VFO_LINE_ARGB).copy(alpha = 0.18f),
-                        topLeft = Offset(bandLeft, 0f),
-                        size = Size((bandRight - bandLeft).coerceAtLeast(1f), size.height),
-                    )
+                    val bandWidth = (bandRight - bandLeft).coerceAtLeast(1f)
+                    // Spectrum shade is the screen background at LV_OPA_50. The waterfall shade
+                    // is the VFO red at LV_OPA_20. Both are the RF.Guru defaults (filter shade 4,
+                    // over the passband). The scale between them stays clear so the labels do.
+                    if (specH > 1f) {
+                        drawRect(
+                            packedArgb(FirmwareLook.PANEL).copy(alpha = FirmwareLook.SPEC_SHADE / 255f),
+                            topLeft = Offset(bandLeft, 0f),
+                            size = Size(bandWidth, specH),
+                        )
+                    }
+                    if (waterH > 1f) {
+                        drawRect(
+                            packedArgb(RadioFace.VFO_LINE_ARGB).copy(alpha = FirmwareLook.WATER_SHADE / 255f),
+                            topLeft = Offset(bandLeft, waterTop),
+                            size = Size(bandWidth, waterH),
+                        )
+                    }
                     val vfoX = RadioFace.fractionForHz(radio.freqHz, hzSpan).coerceIn(0f, 1f) * size.width
-                    drawLine(packedArgb(RadioFace.VFO_LINE_ARGB), Offset(vfoX, 0f), Offset(vfoX, size.height), strokeWidth = 2f)
+                    val cw = radio.mode == PanelMode.Cw.index || radio.mode == PanelMode.Cwr.index
+                    val vfoColor = packedArgb(RadioFace.VFO_LINE_ARGB)
+                    // The spectrum drops its marker in CW and CW-R. The waterfall keeps its centre line.
+                    if (!cw && specH > 1f) {
+                        drawLine(vfoColor, Offset(vfoX, 0f), Offset(vfoX, specH), strokeWidth = FirmwareLook.VFO_PX)
+                    }
+                    if (waterH > 1f) {
+                        drawLine(
+                            vfoColor,
+                            Offset(vfoX, waterTop),
+                            Offset(vfoX, waterTop + waterH),
+                            strokeWidth = FirmwareLook.VFO_PX,
+                        )
+                    }
                 }
                 // With no waterfall, the labels sit in the spectrum just above the scale.
                 val spotTop = if (waterH > 8f) waterTop else (specH - 28f).coerceAtLeast(0f)
