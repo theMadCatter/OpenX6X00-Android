@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -476,28 +477,38 @@ private fun PortraitOperating(
             ClockBlock(state?.battery, onPlaceholder, stationGrid = stationGrid)
         }
         StatusIconRow(onPlaceholder)
-        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PortraitRail(state, page, canOperate, viewModel, onPage = {
-                val pageKey = page.keys.firstOrNull { it.action is radio.kd0cq.x6100.ui.face.FaceAction.NextPage }
-                if (pageKey != null) onKey(pageKey, +1) else onGroup(page.group)
-            })
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                FreqStrip(state, bands, freqGroup, canOperate, viewModel, onFreqGroup, onPlaceholder, large = false)
-                SpectrumStack(
-                    spectrum = viewModel.spectrum,
-                    state = state,
-                    plan = plan,
-                    spots = spots,
-                    canOperate = canOperate,
-                    onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
-                    onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
-                    onZoom = { narrower ->
-                        if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
-                    },
-                    ridgeHold = viewModel.ridgeHold,
-                    waterfallHold = viewModel.waterfallHold,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                )
+        // This is the space above the needle meter. Measuring it, then giving the row that
+        // exact height, is what makes the scope grow into it. A wrap-content row left the
+        // band plan at the bottom of a short strip and the rest of this space empty, in
+        // both 2D and 3D. The frequency strip keeps its own height. The scope takes the rest,
+        // so spectrum-only ends on the band plan the way the landscape scope already does.
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            Row(
+                Modifier.height(maxHeight).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                PortraitRail(state, page, canOperate, viewModel, onPage = {
+                    val pageKey = page.keys.firstOrNull { it.action is radio.kd0cq.x6100.ui.face.FaceAction.NextPage }
+                    if (pageKey != null) onKey(pageKey, +1) else onGroup(page.group)
+                })
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FreqStrip(state, bands, freqGroup, canOperate, viewModel, onFreqGroup, onPlaceholder, large = false)
+                    SpectrumStack(
+                        spectrum = viewModel.spectrum,
+                        state = state,
+                        plan = plan,
+                        spots = spots,
+                        canOperate = canOperate,
+                        onTuneHz = { hz -> if (canOperate) viewModel.setFrequency(hz) },
+                        onKnob = { steps -> if (canOperate) viewModel.tuneBy(steps) },
+                        onZoom = { narrower ->
+                            if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
+                        },
+                        ridgeHold = viewModel.ridgeHold,
+                        waterfallHold = viewModel.waterfallHold,
+                        modifier = Modifier.fillMaxWidth().weight(1f).fillMaxHeight(),
+                    )
+                }
             }
         }
         // Step stays on the frequency strip, next to LOCK. A second full-width "step 500" sat

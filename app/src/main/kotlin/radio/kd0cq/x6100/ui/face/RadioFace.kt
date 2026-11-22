@@ -551,9 +551,14 @@ object RadioFace {
         zoomGuardPx: Float,
         scalePx: Float,
         zoomReservePx: Float,
+        layout: ScopeLayout = ScopeLayout.BOTH,
     ): Float {
         if (viewWidthPx <= 0f) return 0f
-        val chipReachesScale = spectrumPx <= zoomGuardPx + scalePx
+        // Waterfall-only keeps Zoom in the chip row, above this strip. Reserving the
+        // corner there would push the right-hand label inward for a chip that is not
+        // on the strip. Combined and spectrum-only still reserve it when the trace is
+        // only as tall as the chip, which is landscape spectrum-plus-waterfall.
+        val chipReachesScale = layout != ScopeLayout.WATERFALL && spectrumPx <= zoomGuardPx + scalePx
         val usable = if (chipReachesScale) viewWidthPx - zoomReservePx else viewWidthPx
         return usable.coerceAtLeast(1f)
     }
@@ -633,6 +638,46 @@ object RadioFace {
             wanted.coerceIn(minOf(zoomGuardPx, room), room)
         }
         return ScopeSplit(spectrum, (room - spectrum).coerceAtLeast(0f))
+    }
+
+    /**
+     * Where the chips, the trace, the scale, the plan and the waterfall sit in one scope.
+     *
+     * Waterfall-only used to paint the scale at the top of the plot and float the chips
+     * on that same band, so the labels and the chips covered each other and the first
+     * lines of the waterfall. The chip row is now its own band above the plot. The scale
+     * starts where that row ends. Spectrum-only and the combined view keep the chips
+     * painted over the trace, so they do not take height away from a landscape waterfall.
+     * Spectrum-only still gives the trace every pixel the plot has above the scale and
+     * the plan: nothing is left under the band-plan bar.
+     */
+    data class ScopeBands(
+        val chipPx: Float,
+        val spectrumPx: Float,
+        val scalePx: Float,
+        val planPx: Float,
+        val waterfallPx: Float,
+    ) {
+        /** Top of the frequency labels. The chip row, when it has one, ends here. */
+        val scaleTop: Float get() = chipPx + spectrumPx
+
+        fun total(): Float = chipPx + spectrumPx + scalePx + planPx + waterfallPx
+    }
+
+    fun scopeBands(
+        heightPx: Float,
+        chipPx: Float,
+        scalePx: Float,
+        planPx: Float,
+        waterfallShare: Float,
+        zoomGuardPx: Float,
+        ridge: Boolean = false,
+        layout: ScopeLayout = ScopeLayout.BOTH,
+    ): ScopeBands {
+        val chips = if (layout == ScopeLayout.WATERFALL) chipPx.coerceAtLeast(0f) else 0f
+        val plot = (heightPx - chips).coerceAtLeast(0f)
+        val split = scopeSplit(plot, scalePx, planPx, waterfallShare, zoomGuardPx, ridge, layout)
+        return ScopeBands(chips, split.spectrumPx, scalePx.coerceAtLeast(0f), planPx.coerceAtLeast(0f), split.waterfallPx)
     }
 
     /** Nice round ticks across the span, including both edges when they are not already a tick. */

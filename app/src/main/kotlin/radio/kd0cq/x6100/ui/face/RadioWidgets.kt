@@ -745,8 +745,34 @@ fun SpectrumStack(
     val dashPx = with(density) { FirmwareLook.GRID_DASH.dp.toPx() }
     val gridDash = remember(dashPx) { PathEffect.dashPathEffect(floatArrayOf(dashPx, dashPx), 0f) }
 
+    // The caller's modifier carries the weight. The column takes that height, so a
+    // portrait spectrum-only plot grows to the meter instead of wrapping under the chips.
+    // Waterfall-only puts the chips in their own row. On the trace they stay overlaid,
+    // which is what leaves a landscape waterfall its height.
+    Column(modifier.fillMaxWidth().fillMaxHeight()) {
+    if (scopeLayout == ScopeLayout.WATERFALL) {
+        ScopeControls(
+            colormap = colormap,
+            onPalette = { mapName = colormap.next().name },
+            spectrumView = spectrumView,
+            ridgeStyle = ridgeStyle,
+            scopeLayout = scopeLayout,
+            zoom = state?.zoom ?: 1,
+            onZoom = onZoom,
+            onView = { SpectrumChoices.selectView(context, spectrumView.next()) },
+            onStyle = {
+                SpectrumChoices.selectStyle(context, ridgeStyle.next())
+                if (spectrumView == SpectrumView.TRACE) {
+                    SpectrumChoices.selectView(context, SpectrumView.RIDGE)
+                }
+            },
+            onLayout = { SpectrumChoices.selectLayout(context, scopeLayout.next()) },
+        )
+    }
     Box(
-        modifier
+        Modifier
+            .weight(1f)
+            .fillMaxWidth()
             .background(Color.Black)
             .onSizeChanged { size ->
                 paneWidth = size.width
@@ -945,6 +971,7 @@ fun SpectrumStack(
                     zoomGuard,
                     scaleH,
                     ZoomLabelReserve.toPx(),
+                    scopeLayout,
                 )
                 val lefts = RadioFace.placeScaleLabels(
                     centers,
@@ -1058,39 +1085,81 @@ fun SpectrumStack(
             // The CW decoder used to be drawn here, a gold line on a black bar across the
             // bottom of every layout. That covered the band plan and the last waterfall
             // rows. The text still arrives on the link; it is not painted on the scope.
-            // The back rows sit under the chips. A short dark fade keeps the labels readable
-            // without a second hit target over the drag and pinch gestures.
-            val shade = 32.dp.toPx()
-            drawRect(
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent),
-                    startY = 0f,
-                    endY = shade,
-                ),
-                size = Size(size.width, shade),
-            )
+            // The chips sit on the trace. A short dark fade keeps those labels readable
+            // without a second hit target over the drag and pinch gestures. Waterfall-only
+            // has the chips in their own row, so a fade here would darken the scale strip.
+            if (scopeLayout != ScopeLayout.WATERFALL) {
+                val shade = 32.dp.toPx()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent),
+                        startY = 0f,
+                        endY = shade,
+                    ),
+                    size = Size(size.width, shade),
+                )
+            }
         }
 
-        Text(
-            text = "Zoom x${state?.zoom ?: 1}",
-            color = RfGuru.goldText,
-            fontSize = 11.sp,
-            fontFamily = Mono,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 2.dp, end = 4.dp)
-                .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onZoom(true) },
-                        onLongPress = { onZoom(false) },
-                    )
-                }
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-                .semantics { contentDescription = "Spectrum zoom. Tap narrows, hold widens" },
-        )
+        // Over the trace, not over the scale. Waterfall-only draws this same row above
+        // the plot, so it is not placed here.
+        if (scopeLayout != ScopeLayout.WATERFALL) {
+            ScopeControls(
+                colormap = colormap,
+                onPalette = { mapName = colormap.next().name },
+                spectrumView = spectrumView,
+                ridgeStyle = ridgeStyle,
+                scopeLayout = scopeLayout,
+                zoom = state?.zoom ?: 1,
+                onZoom = onZoom,
+                onView = { SpectrumChoices.selectView(context, spectrumView.next()) },
+                onStyle = {
+                    // The second 3D colour. Holding the chip swaps the lawn for the
+                    // FT-710 cyan stream, and opens 3D if the trace was showing.
+                    // The view write is the same store the other orientation reads.
+                    SpectrumChoices.selectStyle(context, ridgeStyle.next())
+                    if (spectrumView == SpectrumView.TRACE) {
+                        SpectrumChoices.selectView(context, SpectrumView.RIDGE)
+                    }
+                },
+                onLayout = { SpectrumChoices.selectLayout(context, scopeLayout.next()) },
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+            )
+        }
+    }
+    }
+}
+
+/**
+ * Palette, 2D/3D, layout, and Zoom.
+ *
+ * On the combined view and on spectrum-only this row is overlaid on the trace. The trace is
+ * tall enough that the row sits above the frequency scale. Waterfall-only has no trace, so
+ * the same row is a column child above the plot. The scale is then its own strip and the
+ * labels are not under the chips. The row itself is not clickable. A drag that starts in
+ * the gap between chips still reaches the canvas.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ScopeControls(
+    colormap: WfColormap,
+    onPalette: () -> Unit,
+    spectrumView: SpectrumView,
+    ridgeStyle: RidgeStyle,
+    scopeLayout: ScopeLayout,
+    zoom: Int,
+    onZoom: (narrower: Boolean) -> Unit,
+    onView: () -> Unit,
+    onStyle: () -> Unit,
+    onLayout: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Row(
-            Modifier.align(Alignment.TopStart).padding(top = 2.dp, start = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1101,10 +1170,7 @@ fun SpectrumStack(
                 fontFamily = Mono,
                 modifier = Modifier
                     .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
-                    .clickable {
-                        val next = colormap.next()
-                        mapName = next.name
-                    }
+                    .clickable(onClick = onPalette)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .semantics { contentDescription = "Waterfall colours ${colormap.label}. Tap for the next palette" },
             )
@@ -1115,20 +1181,7 @@ fun SpectrumStack(
                 fontFamily = Mono,
                 modifier = Modifier
                     .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
-                    .combinedClickable(
-                        onClick = {
-                            SpectrumChoices.selectView(context, spectrumView.next())
-                        },
-                        onLongClick = {
-                            // The second 3D colour. Holding the chip swaps the lawn for the
-                            // FT-710 cyan stream, and opens 3D if the trace was showing.
-                            // The view write is the same store the other orientation reads.
-                            SpectrumChoices.selectStyle(context, ridgeStyle.next())
-                            if (spectrumView == SpectrumView.TRACE) {
-                                SpectrumChoices.selectView(context, SpectrumView.RIDGE)
-                            }
-                        },
-                    )
+                    .combinedClickable(onClick = onView, onLongClick = onStyle)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .semantics {
                         contentDescription = "Spectrum view ${SpectrumRidge.chipLabel(spectrumView, ridgeStyle)}. Tap for 2D or 3D. Hold for the other 3D colours"
@@ -1141,16 +1194,29 @@ fun SpectrumStack(
                 fontFamily = Mono,
                 modifier = Modifier
                     .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
-                    .clickable {
-                        // Layout only. The 2D / 3D choice is a different preference.
-                        SpectrumChoices.selectLayout(context, scopeLayout.next())
-                    }
+                    .clickable(onClick = onLayout)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .semantics {
                         contentDescription = "Scope layout ${scopeLayout.chip}. Tap to cycle spectrum and waterfall, spectrum only, or waterfall only"
                     },
             )
         }
+        Text(
+            text = "Zoom x$zoom",
+            color = RfGuru.goldText,
+            fontSize = 11.sp,
+            fontFamily = Mono,
+            modifier = Modifier
+                .background(RfGuru.bg.copy(alpha = 0.72f), PillShape)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onZoom(true) },
+                        onLongPress = { onZoom(false) },
+                    )
+                }
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .semantics { contentDescription = "Spectrum zoom. Tap narrows, hold widens" },
+        )
     }
 }
 
