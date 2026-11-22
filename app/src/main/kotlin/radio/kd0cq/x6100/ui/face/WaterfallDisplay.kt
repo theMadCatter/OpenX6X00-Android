@@ -153,10 +153,10 @@ object WaterfallDisplay {
         "f9f9cbfafacffafad2fafad7fafad7fbfbdbfbfbdffcfce3fcfce7fcfcebfcfcebfdfdeffdfdf3fefef7fefefbffffff"
 
     /**
-     * How many lines the phone keeps. The radio's own buffer is its screen (MAX_HEIGHT,
-     * 480 on the 800×480 panel). Stopping there left a taller phone pane with 480 lines
-     * and empty pixels under them, or with those lines stretched. One line is one pixel,
-     * so the cap is a tall pane, not the radio's screen.
+     * How many raw lines the screen keeps. The radio's own buffer is its screen (MAX_HEIGHT,
+     * 480 on the 800×480 panel). The phone ring is this deep whatever the pane measures:
+     * the bitmap is still one line per pixel, and a taller pane reads further into the
+     * same lines instead of waiting for new ones.
      */
     const val MAX_ROWS = 4096
 

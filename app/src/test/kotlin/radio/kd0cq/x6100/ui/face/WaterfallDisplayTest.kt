@@ -223,18 +223,54 @@ class WaterfallDisplayTest {
     }
 
     @Test
+    fun theWaterfallHistorySurvivesATallerPane() {
+        // The pane used to own the deque and resize it to its pixel height. Portrait collected
+        // a couple of hundred lines, landscape asked for ~900, and the missing ones were gone,
+        // so the taller bitmap was a thin band over the floor colour until the radio refilled it.
+        val hold = WaterfallHold()
+        assertTrue(hold.history.capacity >= 4096)
+        val kept = 300
+        repeat(kept) { i ->
+            hold.accept(byteArrayOf(1), centreHz = 1_000 + i, widthHz = 100_000, sequence = i.toLong())
+        }
+        assertEquals(kept, hold.history.count())
+
+        // 80 px shows the newest 80. The line that would sit at pixel 80 is still stored.
+        val short = hold.linesFor(80)
+        assertEquals(80, short.size)
+        assertEquals(1_000 + kept - 1, short[0].centreHz)
+        val all = hold.history.snapshot()
+        assertEquals(1_000 + kept - 1 - 80, all[80].centreHz)
+        assertEquals(1_000, all[kept - 1].centreHz)
+
+        // The same holder, now asked for a taller bitmap, still has every line. Collecting the
+        // frame that is already current (the pane was recreated) does not scroll them.
+        val tall = hold.linesFor(900)
+        assertEquals(kept, tall.size)
+        assertEquals(short[0].centreHz, tall[0].centreHz)
+        assertEquals(1_000, tall[kept - 1].centreHz)
+        hold.accept(byteArrayOf(1), 1_000 + kept - 1, 100_000, (kept - 1).toLong())
+        assertEquals(kept, hold.history.count())
+        assertEquals(1_000, hold.history.snapshot()[kept - 1].centreHz)
+
+        // Shrinking the bitmap leaves the ring alone, so growing it again finds the same lines.
+        assertEquals(40, hold.linesFor(40).size)
+        assertEquals(kept, hold.history.count())
+        val regrown = hold.linesFor(200)
+        assertEquals(200, regrown.size)
+        assertEquals(tall[199].centreHz, regrown[199].centreHz)
+        assertEquals(1_000 + kept - 1, regrown[0].centreHz)
+    }
+
+    @Test
     fun historyFollowsThePaneAndTheDialHasTheRadioMarks() {
         val history = SpectrumHistory(4)
         repeat(6) { history.push(byteArrayOf(it.toByte()), 1, 10) }
+        assertEquals(4, history.count())
         assertEquals(4, history.snapshot().size)
-        history.resize(2)
-        assertEquals(2, history.capacity)
-        assertEquals(2, history.snapshot().size)
         assertEquals(5, history.snapshot()[0].db[0].toInt())
-        history.resize(WaterfallDisplay.MAX_ROWS + 40)
-        assertEquals(WaterfallDisplay.MAX_ROWS, history.capacity)
-        // The radio's screen is 480 lines. A phone pane taller than that still gets a line per pixel.
-        assertTrue(WaterfallDisplay.MAX_ROWS > 480)
+        // The ring's cap is the phone's, well above the radio's 480-line screen.
+        assertTrue(WaterfallDisplay.MAX_ROWS >= 4096)
         val tall = SpectrumHistory(2000)
         assertEquals(2000, tall.capacity)
 

@@ -52,6 +52,7 @@ import radio.kd0cq.x6100.log.toEntity
 import radio.kd0cq.x6100.log.toQso
 import radio.kd0cq.x6100.service.RadioConnectionService
 import radio.kd0cq.x6100.ui.face.RidgeHold
+import radio.kd0cq.x6100.ui.face.WaterfallHold
 import radio.kd0cq.x6100.service.RadioRigs
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -104,6 +105,14 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
      * [RidgeHold.accept] allocates a buffer.
      */
     val ridgeHold = RidgeHold()
+
+    /**
+     * Raw waterfall lines, one per spectrum frame, up to [radio.kd0cq.x6100.ui.face.WaterfallDisplay.MAX_ROWS].
+     * Owned here so a configuration change and a taller layout keep them. The pane
+     * paints the newest lines that fit its bitmap and does not resize this ring
+     * to that height. [WaterfallHold.accept] copies each line.
+     */
+    val waterfallHold = WaterfallHold()
 
     /**
      * Local QSOs. The radio's `logq` is a second write of the same text. The password for

@@ -289,6 +289,7 @@ private fun LandscapeOperating(
             },
             waterfallShare = 0.73f,
             ridgeHold = viewModel.ridgeHold,
+            waterfallHold = viewModel.waterfallHold,
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
@@ -494,6 +495,7 @@ private fun PortraitOperating(
                         if (canOperate) viewModel.setZoom(RadioFace.nextZoom(state?.zoom ?: 1, narrower))
                     },
                     ridgeHold = viewModel.ridgeHold,
+                    waterfallHold = viewModel.waterfallHold,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
             }
