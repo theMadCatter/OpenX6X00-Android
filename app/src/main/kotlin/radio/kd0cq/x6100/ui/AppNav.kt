@@ -227,13 +227,25 @@ private fun androidx.navigation.NavGraphBuilder.screens(nav: NavHostController, 
     }
     composable(Route.SCREEN.path) { ScreenMirrorScreen(viewModel) }
     composable(Route.FT8.path) {
-        Ft8Screen(viewModel, onJs8 = { nav.navigate("js8") { launchSingleTop = true } })
+        Ft8Screen(
+            viewModel,
+            onJs8 = { nav.navigate("js8") { launchSingleTop = true } },
+            onPair = { nav.navigate(Route.PAIRING.path) { launchSingleTop = true } },
+        )
     }
     composable("js8") {
-        Js8Screen(viewModel, onBack = { nav.popBackStack() })
+        Js8Screen(
+            viewModel,
+            onBack = { nav.popBackStack() },
+            onPair = { nav.navigate(Route.PAIRING.path) { launchSingleTop = true } },
+        )
     }
     composable("wefax") {
-        WeFaxScreen(viewModel, onBack = { nav.popBackStack() })
+        WeFaxScreen(
+            viewModel,
+            onBack = { nav.popBackStack() },
+            onPair = { nav.navigate(Route.PAIRING.path) { launchSingleTop = true } },
+        )
     }
     composable("cw") {
         CwScreen(viewModel, onBack = { nav.popBackStack() })

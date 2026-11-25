@@ -1687,6 +1687,13 @@ fun MicSwitch(
                 uncheckedThumbColor = RfGuru.dim,
                 uncheckedTrackColor = RfGuru.button,
                 uncheckedBorderColor = RfGuru.border,
+                // A view session disables the switch. Leaving the disabled
+                // track on the gold default kept it looking like a live control.
+                disabledCheckedThumbColor = RfGuru.mute,
+                disabledCheckedTrackColor = RfGuru.mute,
+                disabledUncheckedThumbColor = RfGuru.mute,
+                disabledUncheckedTrackColor = RfGuru.button,
+                disabledUncheckedBorderColor = RfGuru.border,
             ),
         )
     }

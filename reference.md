@@ -773,3 +773,25 @@ The device check of e4662dc on an S24 Ultra, 1080 px wide, left three layout cli
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **260 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.
+
+## A view session's Take control did nothing
+
+**What I found**
+
+An unpaired phone is a view session (`role view`, `tx=0`). `canOperate` is false. The radio face still drew Take control, disabled it, and painted the label `RfGuru.gold`, so the control looked live and a tap never called `takeControl()`. The red line under the key said "Take control before transmitting." for every session that did not hold control, including a viewer. The mode list and the band list did the same thing: `enabled = canOperate` with a hardcoded text colour, which overrides Material's disabled content colour.
+
+`RadioViewModel.lastError` is `RadioLink.lastAnswer`. A panel `err` line is a `PanelEvent.Failure` and was written there. The next `TciEvent.Frequency` wrote "TCI at N Hz" over it. The radio face, FT8 and JS8 never read that string, so `err view only` and `err busy` never appeared. The parser stores the body without the leading `err `.
+
+`FccPart97.gate` returned `TAKE_CONTROL` whenever `holdingControls` was false, and `holdingControls()` is `mine && canOperate`. A view session and an operate session that does not hold control produced the same sentence. The default role before a pair is view, so an unpaired phone was told to take control.
+
+**What changed**
+
+- When the role cannot operate, the radio face, FT8, JS8 and WeFax replace Take control with an enabled "Pair this phone to take control" that opens the Pair screen. An operate session that does not hold control still gets an enabled Take control. The label colour is the button's own content colour. The mode list, the band list and the microphone switch use the disabled content colour while they are disabled. Give control back is unchanged.
+- `RadioFault` is the only decision for the err line. A failure replaces it and the `err ` prefix is put back. A TCI frequency report, a panel notice, and someone else holding control leave it. This phone taking control clears it. `lastAnswer` still records every word, including the frequency, so Setup's status line is unchanged. The radio face shows the fault in front of the gate sentence. FT8, JS8 and WeFax show it with their local refusal, on one line, so the JS8 landscape header does not grow a second row.
+- `FccPart97.controlWord` is what the gate asks first. `canOperate` false, including a view or unpaired session, returns "Pair this phone first." even when the tap is turning a transmission off. `canOperate` true and not holding returns "Take control before transmitting." Holding still skips the band and the transmit flag for an off-command. The parameter defaults to true, so the older gate tests that pass only `holdingControls = false` still expect Take control. Power keeps "Take control before changing power." for an operate session and says to pair when the session cannot operate. Digital button refusals use the same words.
+
+`aViewOrUnpairedSessionIsToldToPair`, `takeControlIsOnlyForASessionThatCanOperateButDoesNotHoldIt`, `aTciFrequencyDoesNotReplaceAnErrLine`, `takingControlClearsTheErrAndSomeoneElseHoldingItDoesNot` and `theFaceKeepsTheErrAndTheGateSentence` lock those states.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **265 tests, 0 failures, 0 errors, 0 skipped**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device. PTT, Tune, the digital words, the band tables and the unkey are unchanged.

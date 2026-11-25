@@ -46,11 +46,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import radio.kd0cq.x6100.digital.FccPart97
 import radio.kd0cq.x6100.net.Band
 import radio.kd0cq.x6100.net.PanelCommands
+import radio.kd0cq.x6100.net.RadioFault
 import radio.kd0cq.x6100.net.PanelMode
 import radio.kd0cq.x6100.net.PanelSettings
 import radio.kd0cq.x6100.net.RadioState
@@ -107,14 +110,17 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
     val license by viewModel.license.collectAsState()
     val powerNote by viewModel.powerNote.collectAsState()
     val tuning by viewModel.tuneKeyed.collectAsState()
+    val fault by viewModel.radioFault.collectAsState()
     val canOperate = role.canOperate
     // Take control, the transmit flag and the band check. The hold is the question.
     // license is read so a change in Setup recomposes this gate.
+    // The err line stays in front of the gate sentence. A TCI frequency is not
+    // in this list: radioFault is what a frequency report is not allowed to replace.
     val voiceWhy = license.let { viewModel.voiceKeyRefusal() }
     val tuneWhy = viewModel.tuneRefusal()
     val mayKey = voiceWhy == null
     val mayTune = tuneWhy == null
-    val gateNote = refusal ?: powerNote ?: voiceWhy ?: tuneWhy?.takeIf { !mayTune }
+    val gateNote = RadioFault.show(fault, refusal, powerNote, voiceWhy, tuneWhy?.takeIf { !mayTune })
     val page = RadioFace.page(pageIndex)
     val radio = state
 
@@ -327,7 +333,9 @@ private fun LandscapeOperating(
                 modifier = Modifier.height(maxHeight).fillMaxWidth(),
             )
         }
-        ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
+        ControlHint(
+            controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel, onPair,
+        )
         LandscapeDeck(
             viewModel, page, state, mayKey, canOperate, keyed, micRefused, onMicRefused, note, onKey, onGroup,
         )
@@ -614,7 +622,9 @@ private fun PortraitOperating(
         CompactSlider("PWR", RadioFace.formatWatts(state?.powerWatts ?: 0.0), (state?.powerTenths ?: 0).toFloat(), 0f..100f, canOperate) {
             viewModel.setPower(it)
         }
-        ControlHint(controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel)
+        ControlHint(
+            controlFree, controlMine, controlTci, keyed, state?.transmitting == true, canOperate, viewModel, onPair,
+        )
         GroupStrip(page.group, onGroup)
         SoftkeyBar(page, state, onKey, Modifier.fillMaxWidth())
     }
@@ -795,13 +805,24 @@ private fun ControlHint(
     transmitting: Boolean,
     canOperate: Boolean,
     viewModel: RadioViewModel,
+    onPair: () -> Unit,
 ) {
     // Taking or dropping control while the carrier is up is how a second client unkeys someone.
     // The button stays hidden until the key is up. `ctl tci` is this phone's own microphone path.
     if (keyed || transmitting) return
+    // A view session, including a phone that has not paired, cannot take control.
+    // The old button was disabled and painted gold, so a tap did nothing and looked live.
+    // This line is enabled and opens Pair. The colour is the button's own, so a
+    // later disabled state cannot be forced back to gold.
+    if (!canOperate) {
+        TextButton(onClick = onPair) {
+            Text(FccPart97.PAIR_TO_CONTROL, maxLines = 1)
+        }
+        return
+    }
     if (!free && !mine && !tci) {
-        TextButton(onClick = { viewModel.takeControl() }, enabled = canOperate) {
-            Text("Take control", color = RfGuru.gold)
+        TextButton(onClick = { viewModel.takeControl() }) {
+            Text("Take control", maxLines = 1)
         }
     } else if (mine) {
         TextButton(onClick = { viewModel.releaseControl() }) {
@@ -895,7 +916,13 @@ private fun ModeDialog(
                     TextButton(onClick = { onMode(mode.index) }, enabled = canOperate) {
                         Text(
                             if (current == mode.index) "${mode.label}  ●" else mode.label,
-                            color = if (current == mode.index) RfGuru.gold else RfGuru.text,
+                            // Unspecified keeps the button's disabled content colour.
+                            // A hardcoded gold made a view session's mode list look live.
+                            color = if (canOperate) {
+                                if (current == mode.index) RfGuru.gold else RfGuru.text
+                            } else {
+                                Color.Unspecified
+                            },
                         )
                     }
                 }
@@ -934,7 +961,10 @@ private fun BandDialog(
                 bands.forEach { band ->
                     val middle = ((band.startHz.toLong() + band.stopHz.toLong()) / 2L).toInt()
                     TextButton(onClick = { onTune(middle) }, enabled = canOperate) {
-                        Text("${band.name}  ${RadioFace.formatFrequency(middle)}", color = RfGuru.text)
+                        Text(
+                            "${band.name}  ${RadioFace.formatFrequency(middle)}",
+                            color = if (canOperate) RfGuru.text else Color.Unspecified,
+                        )
                     }
                 }
             }

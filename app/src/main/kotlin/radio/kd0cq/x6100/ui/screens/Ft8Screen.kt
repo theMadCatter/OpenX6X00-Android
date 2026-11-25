@@ -79,7 +79,9 @@ import androidx.compose.ui.unit.sp
 import radio.kd0cq.x6100.digital.Ft8Heard
 import radio.kd0cq.x6100.digital.Ft8Key
 import radio.kd0cq.x6100.digital.Ft8Line
+import radio.kd0cq.x6100.digital.FccPart97
 import radio.kd0cq.x6100.digital.Ft8Look
+import radio.kd0cq.x6100.net.RadioFault
 import radio.kd0cq.x6100.digital.finderBand
 import radio.kd0cq.x6100.digital.ft8Heard
 import radio.kd0cq.x6100.digital.ft8KeySends
@@ -98,7 +100,7 @@ private data class Ft8Confirm(val title: String, val detail: String, val line: S
 private const val NOT_ON_PANEL = "The panel does not offer that control."
 
 @Composable
-fun Ft8Screen(viewModel: RadioViewModel, onJs8: () -> Unit = {}) {
+fun Ft8Screen(viewModel: RadioViewModel, onJs8: () -> Unit = {}, onPair: () -> Unit = {}) {
     // The radio's FT8 window has no key that opens JS8. The parameter stays
     // so the navigation call site does not change, and this screen does not
     // paint that key.
@@ -109,6 +111,7 @@ fun Ft8Screen(viewModel: RadioViewModel, onJs8: () -> Unit = {}) {
     val waterfall by viewModel.appWaterfall.collectAsState()
     val role by viewModel.role.collectAsState()
     val control by viewModel.control.collectAsState()
+    val fault by viewModel.radioFault.collectAsState()
     var confirm by remember { mutableStateOf<Ft8Confirm?>(null) }
     var refusal by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableIntStateOf(0) }
@@ -173,7 +176,7 @@ fun Ft8Screen(viewModel: RadioViewModel, onJs8: () -> Unit = {}) {
                     var hz = txOffset
                     detectHorizontalDragGestures(
                         onDragStart = {
-                            if (!held) refusal = "Take control before this."
+                            if (!held) refusal = viewModel.whyControlRefused()
                             dragCarry = 0f
                         },
                         onHorizontalDrag = { _, dx ->
@@ -269,15 +272,21 @@ fun Ft8Screen(viewModel: RadioViewModel, onJs8: () -> Unit = {}) {
                 }
             }
         }
-        refusal?.let {
+        RadioFault.show(fault, refusal, separator = " · ")?.let {
             Text(it, color = RfGuru.red, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
         }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (!held) {
-                OutlinedButton(onClick = { viewModel.takeControl() }, enabled = role.canOperate) {
+            if (!role.canOperate) {
+                // Enabled. The colour is the button's own, not a hardcoded gold
+                // on a control the role has turned off.
+                TextButton(onClick = onPair) {
+                    Text(FccPart97.PAIR_TO_CONTROL, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            } else if (!held) {
+                OutlinedButton(onClick = { viewModel.takeControl() }) {
                     Text("Take control")
                 }
             }
@@ -388,7 +397,7 @@ private fun toggleConfirm(
 
 private fun operateResult(viewModel: RadioViewModel, what: String): String? {
     val line = PanelCommands.ft8(what)
-    return if (viewModel.ft8Operate(line)) null else "Take control before this."
+    return if (viewModel.ft8Operate(line)) null else viewModel.whyControlRefused()
 }
 
 @Composable
