@@ -1,9 +1,9 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 //
-// Background running, Chris Fink (KD0CQ): while the switch is on (it starts on),
+// Background running, KD0CQ: while the switch is on (it starts on),
 // this service keeps the Panel and TCI sockets and the receiver audio when the
 // screen is off. The notification names the frequency, the mode and the S-meter,
 // and it offers Stop and Open. A partial wake lock and a high-performance Wi-Fi

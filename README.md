@@ -3,7 +3,7 @@
 An open, community companion app for the Xiegu X6100 running the
 [OpenX6X00](https://github.com/theMadCatter/OpenX6X00) firmware. **Android only** for now.
 
-By Chris Fink KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
+By KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
 
 ## What it is
 
@@ -37,8 +37,8 @@ app/src/main/kotlin/radio/kd0cq/x6100/
   ptt/        PTT lease control with a fail-safe unkey
   discovery/  NSD browse for _tci._tcp / _http._tcp, manual host+port fallback
   service/    the foreground service that owns the connection
-  ui/         Compose screens: Connect, Pairing, Radio (RF.Guru face),
-              Screen, FT8, Spots, Log, Settings
+  ui/         Compose screens: Connect, Pairing, Waterfall, Controls,
+              FT8, Spots, Log, Settings
 app/src/test/ codec unit tests, built from the firmware's real lines and frames
 ```
 

@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The radio's own framebuffer. `screen 1` asks for JPEG frames (the same ones the web panel
@@ -332,7 +332,7 @@ private fun PictureChip(label: String, selected: Boolean, onClick: () -> Unit) {
 /**
  * Open while the radio picture is full screen, and the orientation to put back on close.
  *
- * Chris Fink (KD0CQ): this sits outside composition because locking the activity to sensor
+ * KD0CQ: this sits outside composition because locking the activity to sensor
  * landscape recreates it. The new instance reads [open] and shows the picture again; the
  * orientation we captured is the one the phone had before the lock.
  */

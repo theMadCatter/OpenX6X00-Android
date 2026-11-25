@@ -1,9 +1,9 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // What the phone should do when the radio screen is no longer in front.
-// Chris Fink (KD0CQ) asked for the receiver to keep running, on by default.
+// KD0CQ asked for the receiver to keep running, on by default.
 // No Android types: the activity and the service apply what this decides.
 
 package radio.kd0cq.x6100.service

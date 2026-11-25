@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Where the 2D / 3D choice lives. The pairing token already uses SharedPreferences
@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The spectrum view the operator left selected.
  *
- * Chris Fink (KD0CQ): 2D is what [read] returns until the chip on the scope writes
+ * KD0CQ: 2D is what [read] returns until the chip on the scope writes
  * 3D. The write is the same preference the next process reads, so the choice
  * survives leaving the radio screen.
  */

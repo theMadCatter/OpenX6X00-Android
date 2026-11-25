@@ -1,6 +1,6 @@
 # Reference — audio PTT review (revolta/audio-ptt-core)
 
-Working notes for the review of `revolta/audio-ptt-core` at `f8f8b0c` (base `main` `2098e0b`) and the fixes on `cursor/explicit-ptt-unkey-abc7`. Owner: Chris Fink KD0CQ (theMadCatter). Firmware compared: Guru-RF/OpenX6X00 sources `remote_server.c`, `tci_server.c`, `tci_audio.h`, `control_owner.c`, `radio_session.js` (tree fetched for this review, not the app's DESIGN.md).
+Working notes for the review of `revolta/audio-ptt-core` at `f8f8b0c` (base `main` `2098e0b`) and the fixes on `cursor/explicit-ptt-unkey-abc7`. Owner: KD0CQ (theMadCatter). Firmware compared: Guru-RF/OpenX6X00 sources `remote_server.c`, `tci_server.c`, `tci_audio.h`, `control_owner.c`, `radio_session.js` (tree fetched for this review, not the app's DESIGN.md).
 
 ## What the question was
 
@@ -186,7 +186,7 @@ PTT, the lease, `PanelEventBus` and pairing are unchanged.
 
 ## Shot4 regressions (7edf2a6, 2400×1080 emulator)
 
-Chris Fink (KD0CQ) approved a fix pass against the simulated radio. Five regressions, each fixed at the cause:
+KD0CQ approved a fix pass against the simulated radio. Five regressions, each fixed at the cause:
 
 1. **Frequency.** `FreqPart`'s underline was `fillMaxWidth()` inside the digit `Row`, so the first group (`14`) consumed the row and `.100.000` never laid out. A scrap of a glyph sat against the USB chip. The 7-segment drawing is gone. The readout is tabular monospace (`tnum`) in gold, and `frequencyTextSp` sizes it from the slot (0.62 em advance, plus room for the +/− column, height capped so a 64 dp landscape header is not overflowed). The whole `14.100.000` stays on one line, at least the old 20 sp on a wide slot.
 2. **Waterfall.** Rows were painted 1:1 from the top, so a pane taller than the rows received so far left the bottom at palette index 0 (near black). After ~25 s that was about half the landscape pane. `historyRowAt` stretches the rows that exist across every pixel, and returns to one row per pixel once the history is as tall as the pane. Interpolation and the firmware palettes are unchanged, so a full history stays sharp.
@@ -200,7 +200,7 @@ PTT, the lease, and `PanelEventBus` are unchanged.
 
 ## 3D spectrum (after b249501)
 
-Chris Fink (KD0CQ) asked for the AetherSDR ridge plot: the last few dozen spectra drawn as stacked lines, newest in front, height from the signal, colour from the level.
+KD0CQ asked for the AetherSDR ridge plot: the last few dozen spectra drawn as stacked lines, newest in front, height from the signal, colour from the level.
 
 What I found:
 
@@ -234,7 +234,7 @@ What changed, and the choices:
 
 ## Scope layout (spectrum by itself)
 
-Chris Fink (KD0CQ) wants the 3D surface, or the 2D trace, to be able to fill the scope with no waterfall under it.
+KD0CQ wants the 3D surface, or the 2D trace, to be able to fill the scope with no waterfall under it.
 
 The split always reserved a waterfall band, so the ridges could not use that height. `ScopeLayout` is now `both` (default), `spectrum`, or `waterfall`. It is stored in the same `radio_face` preferences as the 2D/3D choice (`spectrum_layout`). A short chip in the existing row cycles `S+W`, `Spec`, and `WF`, so it does not open a menu over the plot.
 
@@ -246,7 +246,7 @@ A taller spectrum pane does not blow the same 64 ridges up. `rowsForHeight` stay
 
 ## Background running (on by default)
 
-Chris Fink (KD0CQ) wants the Panel socket, the TCI socket and the receiver to keep going with the screen off. What the phone did before: `RadioConnectionService` was already a `connectedDevice` foreground service, and it did not drop the sockets when the activity stopped. `MainActivity.onStop` always called `wentToBackground()`, which unkeys and, if a carrier was up, paints "this app went to the background".
+KD0CQ wants the Panel socket, the TCI socket and the receiver to keep going with the screen off. What the phone did before: `RadioConnectionService` was already a `connectedDevice` foreground service, and it did not drop the sockets when the activity stopped. `MainActivity.onStop` always called `wentToBackground()`, which unkeys and, if a carrier was up, paints "this app went to the background".
 
 What changed:
 
@@ -521,7 +521,7 @@ The ring is now `WaterfallHold` on `RadioViewModel`, the same place as the 3D `R
 
 ## Portrait spectrum height and waterfall chip overlap
 
-Chris (KD0CQ) approved two layout fixes on the same branch.
+KD0CQ approved two layout fixes on the same branch.
 
 **What was wrong**
 
@@ -541,7 +541,7 @@ Chris (KD0CQ) approved two layout fixes on the same branch.
 
 ## S24 landscape: LSB passband, spectrum share, scope height, meter readout
 
-Live check on Chris's (KD0CQ) S24 Ultra (SM-S928U1), landscape, about 2340×1080, radio in LSB at 3.844.000 on 80 m.
+Live check on KD0CQ's S24 Ultra (SM-S928U1), landscape, about 2340×1080, radio in LSB at 3.844.000 on 80 m.
 
 **What was wrong**
 
@@ -566,7 +566,7 @@ Live check on Chris's (KD0CQ) S24 Ultra (SM-S928U1), landscape, about 2340×1080
 
 ## JS8, GhostNet, and the connect field
 
-Chris (KD0CQ) approved a real JS8 screen on the same branch, on top of 5789a3e. The words are the ones OpenX6X00 v0.3.13 added in b2c837d.
+KD0CQ approved a real JS8 screen on the same branch, on top of 5789a3e. The words are the ones OpenX6X00 v0.3.13 added in b2c837d.
 
 **What was wrong**
 
@@ -591,7 +591,7 @@ Chris (KD0CQ) approved a real JS8 screen on the same branch, on top of 5789a3e. 
 
 ## Digital screens matched to the radio
 
-Credit: Chris Fink (KD0CQ). Built on a436b89. The S24 Ultra showed two layout bugs, and the JS8 screen did not follow the radio's own window.
+Credit: KD0CQ. Built on a436b89. The S24 Ultra showed two layout bugs, and the JS8 screen did not follow the radio's own window.
 
 **What I found**
 
@@ -629,7 +629,7 @@ This pass was not re-shot on a device.
 
 ## Each digital mode uses its own radio window
 
-Credit: Chris Fink (KD0CQ). Clarification after 818e523: FT8, FT4 and the other non-JS8 modes must follow their own firmware screens. The JS8 split is not their layout.
+Credit: KD0CQ. Clarification after 818e523: FT8, FT4 and the other non-JS8 modes must follow their own firmware screens. The JS8 split is not their layout.
 
 **What I found**
 
@@ -662,7 +662,7 @@ This pass was not re-shot on a device.
 
 ## JS8 edges, and the header clock and battery
 
-Credit: Chris Fink (KD0CQ). Two leftovers on top of 323ca78, from an S24.
+Credit: KD0CQ. Two leftovers on top of 323ca78, from an S24.
 
 **What I found**
 
@@ -685,5 +685,23 @@ The face clock is the phone, in UTC. It is not the radio's RTC, and it does not 
 `theHeaderClockIsPhoneUtcAndAMissingBatteryIsHidden`, the `bat: -1` parse, `lowBattery(-1)`, and `showButton` cover the sentinel, the UTC digits, and the two-line Show key.
 
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug` after this: **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.
+
+## Credit is the callsign, and the README matches main
+
+**What I found**
+
+The tree, the file headers, and the notes still named the operator as a personal name next to the callsign. The same personal name was in the QRZ sample and in one logged QSO name. `theMadCatter` was already the GitHub handle and had to stay. The README on this branch had put the personal name back into the byline. `main` (`0c7de1f`, "Update author attribution in README.md") already says `By KD0CQ` and keeps the handle. The path given for a newer draft, `/workspace/readme-draft/README.md`, is not on this machine. The clock and battery work does not change what the radio sends: `bat` is still on the state line, including -1, and there is still no time field, so the README Status line stays "Early work. Not yet usable on the air."
+
+**What changed**
+
+- Every credit that paired a personal name with the callsign is now `KD0CQ` (possessive sentences use `KD0CQ's`). Headers read `Copyright (C) 2026 KD0CQ (theMadCatter)`. The handle is unchanged.
+- `README.md` is the file from `main`, byte for byte. Status was not edited.
+- The QRZ fixture and the sample QSO name carry the callsign. The parser still joins the two QRZ name fields.
+
+Git history was not rewritten. Older commits still have the previous credit line.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.

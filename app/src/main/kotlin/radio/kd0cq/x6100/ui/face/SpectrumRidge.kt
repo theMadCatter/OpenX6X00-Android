@@ -1,8 +1,8 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The 3D spectrum Chris Fink (KD0CQ) asked for, beside the 2D trace.
+// The 3D spectrum KD0CQ asked for, beside the 2D trace.
 //
 // Two radios set the look. AetherSDR draws a dense green-yellow lawn: a solid
 // surface, newest ridge in front, colour by level. The Yaesu FT-710 / FTDX10
