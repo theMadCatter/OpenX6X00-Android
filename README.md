@@ -5,6 +5,18 @@ An open, community companion app for the Xiegu X6100 running the
 
 By KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
 
+> **Alpha release.** This is an early public build. It is probably buggy in
+> places. Use it at your own risk.
+>
+> Before any on-air transmission, test into a dummy load first. Confirm the
+> power, band and mode. Choose your license class in Setup, and stay in
+> control of the radio. You are responsible for your transmissions under
+> your license. The on-air checklist is [docs/tx-checklist.md](docs/tx-checklist.md).
+
+![The radio face in landscape, with a live 2D spectrum and waterfall on 40 metres](docs/screenshots/radio-face-landscape-2d.png)
+
+*The radio face in landscape, following the radio's RF.Guru layout. 40 m at 7.074 MHz, live spectrum and waterfall.*
+
 ## What it does
 
 - **Radio face.** One screen laid out like the radio's RF.Guru UI: VFO A/B, mode, AGC,
@@ -28,6 +40,64 @@ By KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
 - **Audio and PTT.** RX/TX audio over TCI, and hold-to-talk with a lease that always
   unkeys on release.
 - **Background running.** A foreground service keeps the link up when the screen is off.
+
+## Screenshots
+
+| 3D spectrum | FT8 |
+| --- | --- |
+| ![The radio face in landscape with the optional 3D spectrum](docs/screenshots/radio-face-landscape-3d.png) | ![The FT8 screen in landscape, with a two-row call lane, waterfall and live decodes](docs/screenshots/ft8-landscape.png) |
+| *Optional 3D spectrum view, same 40 m session.* | *FT8 in landscape: two-row call lane, waterfall and live decodes.* |
+
+| Portrait | Spots |
+| --- | --- |
+| ![The radio face in portrait](docs/screenshots/radio-face-portrait.png) | ![The Spots screen with live cluster spots](docs/screenshots/spots.png) |
+| *Portrait, following the radio's walkie layout.* | *Spots from the radio's DX cluster client.* |
+
+## Getting started
+
+1. **Firmware.** Flash the X6100 with [OpenX6X00](https://github.com/Guru-RF/OpenX6X00).
+   JS8 in this app needs firmware **v0.3.13 or later**.
+2. **Browser remote.** On the radio, open **Settings > General > BROWSER REMOTE**
+   and turn it on (it is on by default). That starts the panel server this app
+   uses, on port **50002**. TCI audio, on port **50001**, is also on by default;
+   **Settings > General > TCI SERVER** can turn it off or change the port.
+3. **Same network.** Put the phone and the radio on the same Wi-Fi or LAN.
+   The radio advertises itself as `x6100.local`. Its IP address is shown in
+   **Settings > Wireless** (the WIFI card lists power, status, IP and networks).
+   If `.local` does not resolve on the phone, type that IP instead.
+4. **Install the app.** For now, [build from source](#building). A signed APK
+   for download will be published in GitHub Releases.
+5. **Connect.** Open the app, Search or enter the host, then **Connect to**
+   that address. When the link is up, press **Open the radio**.
+6. **Pair.** A new session is view only until it is paired. Open **Pair**
+   (from the Connect screen or the Pair control on the radio face) and press
+   **Show a code on the radio**. The radio puts a **six-digit** code on its
+   screen for **two minutes**. **Settings > General > BROWSER REMOTE > Pair
+   code** shows the same code again if you need it. Type the digits and a
+   name for this phone (**This app is**), then **Pair**. Later connections
+   reuse the stored token and do not need a new code.
+7. **Take control.** Pairing is not the same as holding the controls. Press
+   **Take control** to operate the radio. **Give control back** releases it.
+   The radio's own keys and knobs take control back for the operator at the
+   radio.
+8. **Before any transmit.** Choose your license class in **Setup**. Then test
+   into a dummy load first, and work through
+   [docs/tx-checklist.md](docs/tx-checklist.md). You are responsible for your
+   transmissions under your license.
+
+### Troubleshooting
+
+- **Take control does nothing**, or the face says **Pair this phone to take
+  control.** The session is not paired, so it is view only. Pair the phone
+  first, then take control.
+- **`err view only: pair this browser to operate`**, or **Connected, view
+  only: pair to operate.** Same cause: the link is up, but this session has
+  not been paired.
+- **The app cannot connect.** Confirm the phone and radio are on the same
+  network, the host is `x6100.local` or the IP from **Settings > Wireless**,
+  and **BROWSER REMOTE** is on. The panel WebSocket is port **50002**; TCI
+  audio is port **50001**. If the server is off, the radio says **BROWSER
+  REMOTE is off (General): turn it on**.
 
 ## Safety
 
@@ -91,7 +161,7 @@ before keying, and the unkey all stay.
 You are the control operator. A license, a legal frequency, and a legal power
 are yours to get right. The check is a backstop, not a license, and it does
 not know local restrictions or antenna gain. Use a dummy load or low power
-until you have confirmed a path. The on-air checklist is `docs/tx-checklist.md`.
+until you have confirmed a path. The on-air checklist is [docs/tx-checklist.md](docs/tx-checklist.md).
 
 ## How it talks to the radio
 
@@ -132,10 +202,11 @@ app/src/test/ codec unit tests built from the firmware's real lines and frames
 
 ## Status
 
-Beta. Tested receive-only against a real X6100. The panel state line sends
+Alpha. Tested receive-only against a real X6100. The panel state line sends
 battery (`bat`). A reading of 0..100 is shown, and -1 (no pack reading) is
 hidden. The state line does not send a clock, so the header clock is the
-phone's UTC.
+phone's UTC. Transmit is implemented; on-air confirmation is still the
+operator's, into a dummy load first. See [docs/tx-checklist.md](docs/tx-checklist.md).
 
 ## Spirit and license
 
