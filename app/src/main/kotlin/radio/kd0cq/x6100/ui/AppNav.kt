@@ -142,13 +142,7 @@ fun AppNav(viewModel: RadioViewModel) {
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .then(
-                                if (!rail && !onOperating) {
-                                    Modifier.statusBarsPadding().navigationBarsPadding()
-                                } else {
-                                    Modifier
-                                },
-                            ),
+                            .then(hostInsets(rail, onOperating, current?.route)),
                     ) { screens(nav, viewModel) }
                     if (!rail && onOperating) {
                         NavigationBar(containerColor = RfGuru.bar) {
@@ -189,6 +183,22 @@ fun AppNav(viewModel: RadioViewModel) {
             }
         }
     }
+}
+
+/**
+ * Status-bar pad for a page that is not the landscape rail.
+ *
+ * Connect, Pair and Setup also take the navigation-bar pad. JS8 does not:
+ * the screen pads its own bottom from the root insets, including the gesture
+ * floor. Doing it here as well stacked a second pad on a phone that already
+ * reported the bar, and on the S24 the Compose inset at this host was the
+ * one that read 0 while the bar still covered the net reminder.
+ */
+@Composable
+private fun hostInsets(rail: Boolean, onOperating: Boolean, route: String?): Modifier {
+    if (rail || onOperating) return Modifier
+    val status = Modifier.statusBarsPadding()
+    return if (route == "js8") status else status.navigationBarsPadding()
 }
 
 private fun go(nav: NavHostController, route: Route) {

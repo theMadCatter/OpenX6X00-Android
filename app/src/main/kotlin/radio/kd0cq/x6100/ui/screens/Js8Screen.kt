@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,6 +49,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -61,14 +63,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import radio.kd0cq.x6100.digital.GhostNet
+import radio.kd0cq.x6100.ui.LocalWideWindow
 import radio.kd0cq.x6100.digital.Js8Look
 import radio.kd0cq.x6100.digital.Js8Protocol
 import radio.kd0cq.x6100.digital.Js8Row
@@ -115,29 +120,53 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
         if (visible < 0 || visible >= last - 2) listState.scrollToItem(last)
     }
 
+    val wide = LocalWideWindow.current
     DigitalSplit(
         header = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Wide: the back key is 32 dp and the status is one line. That is
+            // the header the landscape budget leaves room under, so the offset
+            // row fits in the right column on the first frame.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     "JS8",
                     color = RfGuru.gold,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 20.sp,
+                    fontSize = if (wide) 16.sp else 20.sp,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onBack) { Text("Back", color = RfGuru.goldText) }
+                TextButton(
+                    onClick = onBack,
+                    contentPadding = if (wide) {
+                        PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    } else {
+                        ButtonDefaults.TextButtonContentPadding
+                    },
+                    modifier = if (wide) Modifier.height(32.dp) else Modifier,
+                ) { Text("Back", color = RfGuru.goldText) }
             }
             if (needsFirmware) {
-                Text(Js8Protocol.NEEDS_FIRMWARE, color = RfGuru.red, fontSize = 13.sp)
+                Text(
+                    Js8Protocol.NEEDS_FIRMWARE,
+                    color = RfGuru.red,
+                    fontSize = 13.sp,
+                    maxLines = if (wide) 1 else 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Text(
                 Js8Look.statusLine(status, rows.size),
                 color = RfGuru.text,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                maxLines = 2,
+                maxLines = if (wide) 1 else 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            refusal?.let { Text(it, color = RfGuru.red, fontSize = 12.sp) }
+            refusal?.let {
+                Text(it, color = RfGuru.red, fontSize = 12.sp, maxLines = if (wide) 1 else 3, overflow = TextOverflow.Ellipsis)
+            }
         },
         picture = {
             AppWaterfallPicture(
@@ -174,8 +203,13 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
         },
         controls = {
             if (!held) {
-                OutlinedButton(onClick = { viewModel.takeControl() }, enabled = role.canOperate) {
-                    Text("Take control")
+                OutlinedButton(
+                    onClick = { viewModel.takeControl() },
+                    enabled = role.canOperate,
+                    contentPadding = if (wide) PaddingValues(horizontal = 12.dp, vertical = 0.dp) else ButtonDefaults.ContentPadding,
+                    modifier = if (wide) Modifier.height(Js8Chrome.TAKE_CONTROL_DP.dp) else Modifier,
+                ) {
+                    Text("Take control", maxLines = 1)
                 }
             } else if (blocked != null) {
                 Text(blocked, color = RfGuru.red, fontSize = 12.sp)
@@ -187,6 +221,7 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
             Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(end = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedButton(onClick = { operate(viewModel, Js8Protocol.command("open")) { refusal = it } }, enabled = held) {
                     Text("Open")
@@ -269,43 +304,77 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                         textAlign = TextAlign.Center,
                         maxLines = 2,
                         softWrap = true,
-                        lineHeight = 14.sp,
-                        fontSize = 12.sp,
+                        lineHeight = if (wide) 12.sp else 14.sp,
+                        fontSize = if (wide) 11.sp else 12.sp,
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "TX ${txOffset ?: "—"} Hz",
-                    color = RfGuru.text,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedButton(
-                    onClick = {
-                        val hz = txOffset ?: return@OutlinedButton
-                        refusal = viewModel.moveJs8Offset(hz - 10)
-                    },
-                    enabled = held && role.txAllowed && txOffset != null,
-                ) { Text("−10") }
-                OutlinedButton(
-                    onClick = {
-                        val hz = txOffset ?: return@OutlinedButton
-                        refusal = viewModel.moveJs8Offset(hz + 10)
-                    },
-                    enabled = held && role.txAllowed && txOffset != null,
-                ) { Text("+10") }
+            // Wide: the step keys, the field and Set are one row. Two rows
+            // put the bottom of Set and the field under the first landscape
+            // frame. Portrait keeps the readout on its own row so the field
+            // has the width of the phone.
+            if (!wide) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "TX ${txOffset ?: "—"} Hz",
+                        color = RfGuru.text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            val hz = txOffset ?: return@OutlinedButton
+                            refusal = viewModel.moveJs8Offset(hz - 10)
+                        },
+                        enabled = held && role.txAllowed && txOffset != null,
+                    ) { Text("−10") }
+                    OutlinedButton(
+                        onClick = {
+                            val hz = txOffset ?: return@OutlinedButton
+                            refusal = viewModel.moveJs8Offset(hz + 10)
+                        },
+                        enabled = held && role.txAllowed && txOffset != null,
+                    ) { Text("+10") }
+                }
             }
-            // The field's own minimum is 280 dp. In the landscape column that
-            // minimum pushed Set past the right edge, including on the first
-            // frame after a rotation, and the column clipped it. The field
-            // takes what is left. Set keeps its own width.
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (wide) {
+                    Text(
+                        "TX ${txOffset ?: "—"}",
+                        color = RfGuru.text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            val hz = txOffset ?: return@OutlinedButton
+                            refusal = viewModel.moveJs8Offset(hz - 10)
+                        },
+                        enabled = held && role.txAllowed && txOffset != null,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(Js8Chrome.BUTTON_ROW_DP.dp),
+                    ) { Text("−10", maxLines = 1) }
+                    OutlinedButton(
+                        onClick = {
+                            val hz = txOffset ?: return@OutlinedButton
+                            refusal = viewModel.moveJs8Offset(hz + 10)
+                        },
+                        enabled = held && role.txAllowed && txOffset != null,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(Js8Chrome.BUTTON_ROW_DP.dp),
+                    ) { Text("+10", maxLines = 1) }
+                }
                 OutlinedTextField(
                     value = offsetText,
                     onValueChange = { offsetText = it.filter { ch -> ch.isDigit() }.take(5) },
-                    label = { Text("Offset Hz", color = RfGuru.dim) },
+                    label = { Text(if (wide) "Hz" else "Offset Hz", color = RfGuru.dim, fontSize = if (wide) 11.sp else 12.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(1f).defaultMinSize(minWidth = 0.dp),
                 )
@@ -315,12 +384,18 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                         refusal = viewModel.moveJs8Offset(hz)
                     },
                     enabled = held && role.txAllowed && offsetText.isNotEmpty(),
-                    modifier = Modifier.defaultMinSize(minWidth = 64.dp),
+                    contentPadding = if (wide) PaddingValues(horizontal = 8.dp, vertical = 0.dp) else ButtonDefaults.ContentPadding,
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 52.dp)
+                        .then(if (wide) Modifier.height(Js8Chrome.BUTTON_ROW_DP.dp) else Modifier),
                 ) { Text("Set", maxLines = 1, softWrap = false) }
             }
             if (show == Js8Look.Show.GHOSTNET) {
-                Text(GhostNet.REMINDER, color = RfGuru.text, fontSize = 12.sp)
-                Text(GhostNet.SETTINGS_NOTE, color = RfGuru.dim, fontSize = 11.sp)
+                // Full sentences. Portrait does not cap this column, and the
+                // navigation pad is under the column, so both lines wrap
+                // above the system bar instead of ending on it.
+                Text(GhostNet.REMINDER, color = RfGuru.text, fontSize = 12.sp, modifier = Modifier.fillMaxWidth())
+                Text(GhostNet.SETTINGS_NOTE, color = RfGuru.dim, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
                     value = region,
                     onValueChange = {

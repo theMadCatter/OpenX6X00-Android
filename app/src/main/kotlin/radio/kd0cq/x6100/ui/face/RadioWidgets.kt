@@ -284,6 +284,8 @@ fun UtcClock(modifier: Modifier = Modifier, fontSize: androidx.compose.ui.unit.T
         fontSize = fontSize,
         maxLines = 1,
         softWrap = false,
+        // Clip keeps a glyph from painting into the Pair pill beside this clock.
+        overflow = TextOverflow.Clip,
         modifier = modifier.semantics { contentDescription = "UTC $text" },
     )
 }
@@ -294,13 +296,15 @@ fun ClockBlock(
     onPlaceholder: (String) -> Unit,
     modifier: Modifier = Modifier,
     stationGrid: String = "",
+    clockSp: androidx.compose.ui.unit.TextUnit = RadioFace.PORTRAIT_CLOCK_SP.sp,
 ) {
     // -1 is the radio's "no pack reading". Hiding it is the face. A missing
     // state (nothing connected) still says so, with an em dash, so a blank
     // header is not mistaken for a radio that reported external power.
+    // The clock is 12 sp. 14 sp on the 1080 px-wide header reached the Pair pill.
     val percent = RadioFace.batteryOnFace(batteryPercent)
     Column(modifier = modifier, horizontalAlignment = Alignment.End) {
-        UtcClock()
+        UtcClock(fontSize = clockSp)
         if (percent != null) {
             Text(
                 "$percent%",

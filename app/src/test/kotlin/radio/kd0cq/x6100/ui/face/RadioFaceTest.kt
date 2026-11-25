@@ -46,6 +46,20 @@ class RadioFaceTest {
     }
 
     @Test
+    fun thePortraitClockClearsThePairPillOnTheS24() {
+        // 1080 px at 450 dpi, minus the 6 dp page padding on each side.
+        val content = RadioFace.s24PortraitContentWidthDp()
+        assertEquals(372f, content, 0.01f)
+        assertTrue(RadioFace.portraitClockClearsThePills(content))
+        val gap = RadioFace.portraitClockLeftDp(content) - RadioFace.portraitPairRightDp(content)
+        assertEquals(RadioFace.PORTRAIT_CLOCK_GAP_DP, gap, 0.01f)
+        assertEquals(12f, RadioFace.PORTRAIT_CLOCK_SP, 0.01f)
+        // 14 sp is the size that reached the pill. It is wider than the 12 sp clock by more than the gap.
+        val eaten = RadioFace.utcClockWidthDp(14f) - RadioFace.utcClockWidthDp(RadioFace.PORTRAIT_CLOCK_SP)
+        assertTrue(eaten > RadioFace.PORTRAIT_CLOCK_GAP_DP)
+    }
+
+    @Test
     fun theWindowAspectPicksTheOperatingFace() {
         assertTrue(RadioFace.wideWindow(800f, 360f))
         assertFalse(RadioFace.wideWindow(360f, 800f))

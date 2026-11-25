@@ -354,6 +354,56 @@ object RadioFace {
             .withZone(java.time.ZoneOffset.UTC)
             .format(java.time.Instant.ofEpochMilli(epochMs))
 
+    /**
+     * Portrait header clock, and the gap between it and the Pair pill.
+     *
+     * On the S24 Ultra at 1080 px wide (450 dpi, 384 dp, 372 dp after the
+     * page padding) the 14 sp clock sat on that pill. Pair is pinned beside
+     * the clock, the clock is 12 sp, and 8 dp of padding is the gap. The
+     * advance is the same 0.62 em the frequency readout uses, so the test
+     * and the slot agree.
+     */
+    const val PORTRAIT_CLOCK_SP = 12f
+    const val PORTRAIT_CLOCK_GAP_DP = 8f
+    const val PORTRAIT_PAIR_GAP_DP = 4f
+
+    /** "Pair" at 11 sp, plus the pill's own padding and border. The start gap is separate. */
+    const val PORTRAIT_PAIR_PILL_DP = 44f
+
+    private const val MONO_ADVANCE = 0.62f
+
+    fun utcClockWidthDp(fontSp: Float): Float = "HH:mm:ssZ".length * fontSp * MONO_ADVANCE
+
+    /** 1080 px at 450 dpi, minus the portrait page's 6 dp on each side. */
+    fun s24PortraitContentWidthDp(): Float = 1080f / 2.8125f - 12f
+
+    /**
+     * Right edge of the scrolling pills, then Pair, then the gap, then the
+     * clock. The clock's left edge is the content width minus the clock.
+     */
+    fun portraitClockLeftDp(contentWidthDp: Float): Float =
+        contentWidthDp - utcClockWidthDp(PORTRAIT_CLOCK_SP)
+
+    fun portraitPairRightDp(contentWidthDp: Float): Float =
+        portraitClockLeftDp(contentWidthDp) - PORTRAIT_CLOCK_GAP_DP
+
+    fun portraitPairLeftDp(contentWidthDp: Float): Float =
+        portraitPairRightDp(contentWidthDp) - PORTRAIT_PAIR_PILL_DP
+
+    fun portraitPillsRightDp(contentWidthDp: Float): Float =
+        portraitPairLeftDp(contentWidthDp) - PORTRAIT_PAIR_GAP_DP
+
+    /** The pill box and the clock box do not meet, and the pills still have a slot. */
+    fun portraitClockClearsThePills(contentWidthDp: Float): Boolean {
+        val pillsRight = portraitPillsRightDp(contentWidthDp)
+        val pairLeft = portraitPairLeftDp(contentWidthDp)
+        val pairRight = portraitPairRightDp(contentWidthDp)
+        val clockLeft = portraitClockLeftDp(contentWidthDp)
+        return pillsRight >= 200f &&
+            pillsRight <= pairLeft + 0.01f &&
+            pairRight + PORTRAIT_CLOCK_GAP_DP <= clockLeft + 0.01f
+    }
+
     fun frequencyTextSp(widthDp: Float, heightDp: Float, text: String): Float {
         val advance = 0.62f
         val chars = text.length.coerceAtLeast(1) + 1.5f
