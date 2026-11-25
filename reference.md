@@ -705,3 +705,17 @@ Git history was not rewritten. Older commits still have the previous credit line
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.
+
+## The approved README, with the Status line matched to the wire
+
+**What I found**
+
+The README placeholder in the previous request never expanded, so that pass used the file already on `main`. The approved text arrived in the follow-up. It already credits `KD0CQ` and keeps `theMadCatter`. Its Status line said the radio does not yet send its clock or its battery. That is true of the clock: the panel state line and TCI have no time field, and the header clock is the phone's UTC. It is not true of the battery. `pstate_line` already writes `bat`. A value in 0..100 is the percent on the face. -1 is external power or no reading yet, and the face hides it. The clock and battery work did not add a field and does not send `clk`.
+
+**What changed**
+
+`README.md` is the approved text. The Status line is the only edit. It keeps "Beta. Tested receive-only against a real X6100." and then says `bat` is sent, 0..100 is shown, -1 is hidden, and the clock is the phone's UTC because the radio does not send one.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: the tasks were up to date, and the last executed run is still **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.
