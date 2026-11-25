@@ -41,8 +41,35 @@ enum class LinkPhase {
 /** The panel WebSocket: the radio's state, the spectrum, the apps, pairing and control. */
 interface PanelClient : Closeable {
 
-    /** What the radio said, in the order it arrived. */
+    /**
+     * Text from the radio, in the order it arrived: `ctl`, `tx`, `role`, `err`, `state`, and the
+     * rest of the panel's lines. This flow does not carry spectrum or screen frames, and it does
+     * not drop a line to make room for one.
+     */
     val events: kotlinx.coroutines.flow.Flow<PanelEvent>
+
+    /**
+     * Spectrum and screen frames only, conflated to the latest. A collector that is behind misses
+     * intermediate pictures and still has the newest one. Missing a frame here never takes a
+     * control or PTT line with it.
+     */
+    val frames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
+     * The JS8 and FT8 app waterfall, also conflated to the latest. It is not on [frames]:
+     * those two pictures would replace each other, and a spectrum flood would hide every
+     * JS8 line. It is not on [events] either, so a row of bins cannot sit in front of `ctl`.
+     */
+    val appFrames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
+     * WeFax scan lines. Not on [frames] and not on [events]: a chart is a
+     * stream of rows, and one of them must not sit in front of `ctl`.
+     */
+    val faxFrames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
 
     /** The link's phase, and the last word about why it is not up. */
     val phase: kotlinx.coroutines.flow.StateFlow<LinkPhase>
@@ -55,6 +82,13 @@ interface PanelClient : Closeable {
 
     /** One command line to the radio; dropped with a word into [lastError] when the link is down. */
     fun send(command: String)
+
+    /**
+     * The same line, and whether the socket took it. A PTT renewal has to know: a renewal that never
+     * left the phone is a lease about to end, and the honest answer then is to stop pressing, not to
+     * keep pressing into the dark.
+     */
+    fun sendChecked(command: String): Boolean
 
     /** Put a six-digit code on the radio's screen, and answer it with [pair]. */
     fun askForPairingCode()
@@ -82,8 +116,15 @@ interface TciClient : Closeable {
 
     fun send(command: String)
 
+    /** [send], and whether the socket took it: the key and the unkey both ask before acting on it. */
+    fun sendChecked(command: String): Boolean
+
     /** A binary frame: our microphone's TX_AUDIO while keyed. TX_CHRONO ticks come the other way. */
     fun sendFrame(frame: ByteArray)
+
+    /** [sendFrame], and whether the socket took it. A frame it would not take is a silent transmitter,
+     *  and the radio unkeys a silent one; saying so is what lets us stop first. */
+    fun sendFrameChecked(frame: ByteArray): Boolean
 }
 
 /** How long to wait before trying again, in the way the browser page does: a short wait that grows. */

@@ -94,6 +94,22 @@ object PanelCommands {
     /** Watch the radio's own state, spectrum and apps: this is what makes a connection a panel client. */
     fun panel(on: Boolean) = "panel ${if (on) 1 else 0}"
 
+    /**
+     * What a new panel socket asks for once it is open.
+     *
+     * `remote_server.c` sends `role` and `ctl` on the WebSocket handshake, and again for `auth`.
+     * `panel 1` sets `panel_fresh` only when this socket was not already subscribed (`on != c->panel`),
+     * which is true of every new socket and false of a second `panel 1` on the same one. `panel_fresh`
+     * is the resync: modes, bands, the plan, and the whole `state` line, whose `tx` field is the
+     * carrier. There is no separate "send state" command. Toggling `panel 0` then `panel 1` on a
+     * live socket would ask again, and it is not used here: picture frames no longer share a queue
+     * with these lines, so a waterfall does not create a gap to heal.
+     */
+    fun reconnect(token: String?): List<String> = buildList {
+        if (!token.isNullOrEmpty()) add(auth(token))
+        add(panel(on = true))
+    }
+
     /** The radio's screen as JPEG frames; the waterfall page turns them off to save the bandwidth. */
     fun screen(on: Boolean) = "screen ${if (on) 1 else 0}"
 
@@ -135,11 +151,25 @@ object PanelCommands {
     fun key(name: String, down: Boolean, lease: String? = null): String =
         if (lease != null) "key $name ${if (down) 1 else 0} $lease" else "key $name ${if (down) 1 else 0}"
 
+    /**
+     * The external-tuner lease. `tune 1 HOLD` starts it and renews it.
+     * `tune 0` stops a tune this client owns. HOLD is ignored on the way down.
+     * This is not `set atu`, which only enables the tuner and does not key.
+     */
+    fun tune(on: Boolean, hold: Long): String = if (on) "tune 1 $hold" else "tune 0"
+
     /** Turn a knob by N detents, negative the other way. The names are in panel.html's remoteKnob. */
     fun knob(name: String, detents: Int) = "knob $name $detents"
 
     /** The FT8 app: open, close, cq, stop, auto, hold, mode, txfreq, reply, txcall. */
     fun ft8(what: String, arg: String? = null): String = if (arg != null) "ft8 $what $arg" else "ft8 $what"
+
+    /**
+     * The JS8 app, as v0.3.13 answers it. "js8 send TEXT" is built by
+     * [radio.kd0cq.x6100.digital.Js8Protocol.send] so the spaces survive.
+     * There is no "js8 tx".
+     */
+    fun js8(what: String): String = radio.kd0cq.x6100.digital.Js8Protocol.command(what)
 
     /** "log CALL|RSTS|RSTR|NAME|QTH|GRID|COUNTRY" — the radio's CW keyboard's own text. */
     fun log(text: String) = "log $text"
@@ -156,7 +186,12 @@ data class RadioState(
     val freqHz: Int,
     /** The index into [PanelMode]; the radio tells a number, never a name. */
     val mode: Int,
-    /** The filter's passband, Hz from the carrier: negative below it. */
+    /**
+     * The filter's low and high cuts, in audio Hz, as `cfg_cur_filter_low` and
+     * `cfg_cur_filter_high`. Both are positive on the air (300 and 2700 for SSB).
+     * They are not yet a side of the carrier: LSB keeps the same two numbers as USB.
+     * [RadioFace.passbandHz] puts them above or below the dial from the mode.
+     */
     val filterLowHz: Int,
     val filterHighHz: Int,
     /** 0 off, 1 slow, 2 fast, 3 auto. */
@@ -178,9 +213,27 @@ data class RadioState(
     /** Which VFO the screen is on; "set vfo" toggles it. */
     val vfo: Int,
     val atuOn: Boolean,
+    /**
+     * `bat`, from `radio_get_battery`. A percent in 0..100 is the figure on
+     * the radio. -1 is external power, or the base has not measured the pack
+     * yet. The face hides that sentinel. It is kept here so a later line can
+     * still tell "no reading" from "the key was absent" (the parser's 0).
+     */
     val battery: Int,
     val transmitting: Boolean,
     val freqLocked: Boolean,
+    /**
+     * `kt`, the CW key tone in Hz. The filter edges are tones, and the band the
+     * waterfall draws sits around the dial by this tone. 0 when the state line
+     * does not carry it.
+     */
+    val keyToneHz: Int = 0,
+    /**
+     * `cwrise`. True on a radio whose CW tone rises as the dial goes up (the X6200),
+     * so CW's passband is on the same side as CW-R. False on the X6100, where CW
+     * is the upper side and CW-R is the lower side.
+     */
+    val cwToneRises: Boolean = false,
 ) {
     val modeLabel: String get() = PanelMode.fromIndex(mode)?.label ?: "mode $mode"
     val attenuatorOn: Boolean get() = att > 0
@@ -349,6 +402,28 @@ data class SpectrumFrame(
     override fun hashCode(): Int = ((((bins * 31 + centreHz) * 31 + widthHz) * 31 + sequence.hashCode()) * 31) + db.contentHashCode()
 }
 
+/**
+ * One line of the JS8 or FT8 app waterfall.
+ *
+ * "8 bytes LE {u16 0xFFFD, u16 bins, u16 lo Hz, u16 hi Hz}" then one int8 per
+ * bin, dB over the noise floor. The same header serves both apps. The client
+ * flag is one bit (`appwf`), set by "js8 wf 1" or "ft8 wf 1". This screen asks
+ * only for the JS8 one, and it stops it on the way out.
+ */
+data class AppWaterfallFrame(
+    val bins: Int,
+    val lowHz: Int,
+    val highHz: Int,
+    val db: ByteArray,
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            (other is AppWaterfallFrame && bins == other.bins && lowHz == other.lowHz &&
+                highHz == other.highHz && db.contentEquals(other.db))
+
+    override fun hashCode(): Int = (((bins * 31 + lowHz) * 31 + highHz) * 31) + db.contentHashCode()
+}
+
 /** A screen frame: "8 bytes LE {u16 w, u16 h, u32 seq}" then a JPEG. */
 data class ScreenFrame(val width: Int, val height: Int, val sequence: Long, val jpeg: ByteArray) {
     override fun equals(other: Any?): Boolean =
@@ -383,6 +458,21 @@ sealed class PanelEvent {
     data class DecodedFt8Row(val row: Ft8Row) : PanelEvent()
     data class Ft8(val status: Ft8Status) : PanelEvent()
 
+    /** "js8r {...}". The same id is delivered again while the message is still arriving. */
+    data class DecodedJs8(val row: radio.kd0cq.x6100.digital.Js8Row) : PanelEvent()
+
+    /** "js8 {...}", the app's switches and the note from the last command. */
+    data class Js8(val status: radio.kd0cq.x6100.digital.Js8Status) : PanelEvent()
+
+    /** The 0xFFFD app waterfall. It rides its own lane so it cannot replace a spectrum frame. */
+    data class AppWaterfall(val frame: AppWaterfallFrame) : PanelEvent()
+
+    /** "wefax {...}". The picture rows are [WeFaxRow], on their own lane. */
+    data class WeFax(val status: radio.kd0cq.x6100.digital.WeFaxStatus) : PanelEvent()
+
+    /** One grey scan line, magic 0xFFFE. Not a JPEG and not the app waterfall. */
+    data class WeFaxRow(val row: radio.kd0cq.x6100.digital.WeFaxScan) : PanelEvent()
+
     /** The CW decoder's text, one line per decode. */
     data class Cw(val text: String) : PanelEvent()
     data class Logged(val receipt: LoggedReceipt) : PanelEvent()
@@ -408,6 +498,11 @@ object PanelProtocol {
 
     private const val SPECTRUM_MAGIC = 0xFFFF
     private const val SPECTRUM_HEADER = 16
+    private const val APP_WATERFALL_MAGIC = 0xFFFD
+    private const val APP_WATERFALL_HEADER = 8
+    private const val WEFAX_MAGIC = 0xFFFE
+    private const val WEFAX_HEADER = 8
+    private const val WEFAX_MAX_WIDTH = 4096
     private const val SCREEN_HEADER = 8
 
     /** One text message, or null when the radio said something we do not know yet. */
@@ -433,6 +528,9 @@ object PanelProtocol {
             "spots" -> parseSpots(rest)
             "ft8r" -> parseFt8Row(rest)
             "ft8" -> parseFt8Status(rest)
+            "js8r" -> radio.kd0cq.x6100.digital.Js8Protocol.parseRow(rest)?.let { PanelEvent.DecodedJs8(it) }
+            "js8" -> radio.kd0cq.x6100.digital.Js8Protocol.parseStatus(rest)?.let { PanelEvent.Js8(it) }
+            "wefax" -> radio.kd0cq.x6100.digital.WeFaxProtocol.parse(rest)?.let { PanelEvent.WeFax(it) }
             "cw" -> parseCw(rest)
             "logged" -> parseLogged(rest)
             "role" -> parseRole(rest)
@@ -496,6 +594,8 @@ object PanelProtocol {
                 battery = i("bat"),
                 transmitting = flag("tx"),
                 freqLocked = flag("lock"),
+                keyToneHz = i("kt"),
+                cwToneRises = flag("cwrise"),
             )
         )
     }
@@ -670,9 +770,52 @@ object PanelProtocol {
         return PanelEvent.Sessions(sessions)
     }
 
-    /** A binary frame: the spectrum, or a screen. Null for a frame we cannot make sense of. */
+    /**
+     * A binary frame: the receiver spectrum (0xFFFF), the JS8/FT8 app waterfall
+     * (0xFFFD), a WeFax scan line (0xFFFE), or a screen JPEG. The app waterfall
+     * is tried before the screen. Its first bins can be 0xFF 0xD8, which is
+     * also how a JPEG starts, and the magic would otherwise be read as a
+     * screen width. The fax line is the same kind of collision.
+     */
     fun parseBinary(bytes: ByteArray): PanelEvent? =
-        parseSpectrum(bytes)?.let { PanelEvent.Spectrum(it) } ?: parseScreenFrame(bytes)?.let { PanelEvent.Screen(it) }
+        parseSpectrum(bytes)?.let { PanelEvent.Spectrum(it) }
+            ?: parseAppWaterfall(bytes)?.let { PanelEvent.AppWaterfall(it) }
+            ?: parseWeFax(bytes)?.let { PanelEvent.WeFaxRow(it) }
+            ?: parseScreenFrame(bytes)?.let { PanelEvent.Screen(it) }
+
+    /**
+     * The JS8 or FT8 app waterfall: 8 bytes LE {u16 0xFFFD, u16 bins, u16 lo Hz,
+     * u16 hi Hz}, then one int8 per bin. A short payload is not a frame.
+     */
+    fun parseAppWaterfall(bytes: ByteArray): AppWaterfallFrame? {
+        if (bytes.size < APP_WATERFALL_HEADER) return null
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if ((buf.short.toInt() and 0xFFFF) != APP_WATERFALL_MAGIC) return null
+        val bins = buf.short.toInt() and 0xFFFF
+        val lowHz = buf.short.toInt() and 0xFFFF
+        val highHz = buf.short.toInt() and 0xFFFF
+        if (bins <= 0 || bytes.size - APP_WATERFALL_HEADER < bins) return null
+        val db = ByteArray(bins)
+        buf.get(db)
+        return AppWaterfallFrame(bins, lowHz, highHz, db)
+    }
+
+    /**
+     * One WeFax scan line: 8 bytes LE {u16 0xFFFE, u16 width, u32 row number},
+     * then one grey byte per pixel. A short payload is not a line. A width
+     * past 4096 is not a line either: the radio's chart is 1809 pixels wide.
+     */
+    fun parseWeFax(bytes: ByteArray): radio.kd0cq.x6100.digital.WeFaxScan? {
+        if (bytes.size < WEFAX_HEADER) return null
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if ((buf.short.toInt() and 0xFFFF) != WEFAX_MAGIC) return null
+        val width = buf.short.toInt() and 0xFFFF
+        val number = buf.int.toLong() and 0xFFFFFFFFL
+        if (width <= 0 || width > WEFAX_MAX_WIDTH || bytes.size - WEFAX_HEADER < width) return null
+        val grey = ByteArray(width)
+        buf.get(grey)
+        return radio.kd0cq.x6100.digital.WeFaxScan(number, grey)
+    }
 
     /** The waterfall's FFT: a 16-byte header with 0xFFFF, bins, centre, width, sequence, then int8 dB. */
     fun parseSpectrum(bytes: ByteArray): SpectrumFrame? {

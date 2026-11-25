@@ -57,8 +57,26 @@ class PanelProtocolTest {
         assertEquals(2, s.stepIndex)
         assertTrue(s.atuOn)
         assertEquals(78, s.battery)
+        // radio_get_battery returns -1 on external power, or before a reading.
+        val external = """state {"freq":14074000,"mode":3,"bat":-1}"""
+        val none = (PanelProtocol.parseLine(external) as PanelEvent.State).state
+        assertEquals(-1, none.battery)
         assertFalse(s.transmitting)
         assertFalse(s.freqLocked)
+        // A line that does not carry the key tone keeps the defaults.
+        assertEquals(0, s.keyToneHz)
+        assertFalse(s.cwToneRises)
+    }
+
+    @Test
+    fun stateLineKeepsTheKeyToneAndWhichSideCwRisesOn() {
+        val line = """state {"freq":3844000,"mode":0,"kt":700,"cwrise":1,"flo":300,"fhi":2700}"""
+        val s = (PanelProtocol.parseLine(line) as PanelEvent.State).state
+        assertEquals(700, s.keyToneHz)
+        assertTrue(s.cwToneRises)
+        assertEquals(300, s.filterLowHz)
+        assertEquals(2700, s.filterHighHz)
+        assertEquals(PanelMode.Lsb, PanelMode.fromIndex(s.mode))
     }
 
     @Test
@@ -347,6 +365,106 @@ class PanelProtocolTest {
         assertEquals("log KD0CQ|599|599", PanelCommands.log("KD0CQ|599|599"))
         assertEquals("logq 7 KD0CQ|599|599", PanelCommands.logq(7, "KD0CQ|599|599"))
         assertEquals("logq? 7 KD0CQ|599|599", PanelCommands.logqQuery(7, "KD0CQ|599|599"))
+    }
+
+    @Test
+    fun js8LinesUseTheFieldsTheRadioWrites() {
+        val rowLine = """js8r {"id":7,"utc":123456,"snr":-9,"f":800,"sp":1,"tx":0,"me":1,"cq":0,"hb":0,"grp":1,"lc":0,"part":1,"chk":1,"fr":"KN4ABC","to":"@GNUSAMO","g":"EM37","x":"@GNUSAMO HELLO"}"""
+        val row = (PanelProtocol.parseLine(rowLine) as PanelEvent.DecodedJs8).row
+        assertEquals(7L, row.id)
+        assertEquals(123456, row.utc)
+        assertEquals(-9, row.snr)
+        assertEquals(800, row.freqHz)
+        assertEquals(1, row.submode)
+        assertTrue(row.toMe)
+        assertTrue(row.group)
+        assertTrue(row.partial)
+        assertEquals("KN4ABC", row.from)
+        assertEquals("@GNUSAMO", row.to)
+        assertEquals("EM37", row.grid)
+        assertEquals("@GNUSAMO HELLO", row.text)
+        assertFalse(row.cq)
+        assertFalse(row.heartbeat)
+
+        val grown = """js8r {"id":7,"utc":123456,"snr":-9,"f":800,"sp":1,"tx":0,"me":1,"cq":0,"hb":0,"grp":1,"lc":0,"part":0,"chk":1,"fr":"KN4ABC","to":"@GNUSAMO","g":"EM37","x":"@GNUSAMO HELLO THERE"}"""
+        val again = (PanelProtocol.parseLine(grown) as PanelEvent.DecodedJs8).row
+        val kept = radio.kd0cq.x6100.digital.Js8Protocol.upsert(listOf(row), again)
+        assertEquals(1, kept.size)
+        assertEquals("@GNUSAMO HELLO THERE", kept[0].text)
+        assertFalse(kept[0].partial)
+
+        val stateLine = """js8 {"open":1,"busy":0,"sending":1,"acq":0,"hb":0,"auto":0,"hold":1,"speed":2,"frame":1,"frames":4,"txf":1500,"selhz":800,"hbmin":10,"next":20,"notes":2,"noteerr":0,"notefor":"send","note":"ok","sel":"KN4ABC","where":"40m","text":"CQ CQ"}"""
+        val state = (PanelProtocol.parseLine(stateLine) as PanelEvent.Js8).status
+        assertTrue(state.open)
+        assertFalse(state.busy)
+        assertTrue(state.sending)
+        assertFalse(state.autoCq)
+        assertFalse(state.heartbeat)
+        assertFalse(state.auto)
+        assertTrue(state.hold)
+        assertEquals(2, state.speed)
+        assertEquals(1, state.frame)
+        assertEquals(4, state.frames)
+        assertEquals(1500, state.txFreqHz)
+        assertEquals(800, state.selectedHz)
+        assertEquals(10, state.heartbeatMinutes)
+        assertEquals(20, state.nextSeconds)
+        assertEquals("send", state.noteFor)
+        assertEquals("ok", state.note)
+        assertEquals("KN4ABC", state.selectedCall)
+        assertEquals("40m", state.where)
+        assertEquals("CQ CQ", state.text)
+    }
+
+    /** 8 bytes LE {u16 0xFFFD, u16 bins, u16 lo, u16 hi}, then int8 per bin. Not a spectrum and not a JPEG. */
+    @Test
+    fun appWaterfallHeaderIsTheJs8Frame() {
+        val bins = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 10, -3)
+        val bytes = ByteBuffer.allocate(8 + bins.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putShort(0xFFFD.toShort())
+            .putShort(bins.size.toShort())
+            .putShort(300.toShort())
+            .putShort(2700.toShort())
+            .put(bins)
+            .array()
+        val event = PanelProtocol.parseBinary(bytes) as PanelEvent.AppWaterfall
+        assertEquals(4, event.frame.bins)
+        assertEquals(300, event.frame.lowHz)
+        assertEquals(2700, event.frame.highHz)
+        assertArrayEquals(bins, event.frame.db)
+        assertNull(PanelProtocol.parseSpectrum(bytes))
+        assertNull(PanelProtocol.parseScreenFrame(bytes))
+
+        val short = bytes.copyOf(8)
+        assertNull(PanelProtocol.parseAppWaterfall(short))
+        assertNull(PanelProtocol.parseBinary(short))
+    }
+
+    /** 8 bytes LE {u16 0xFFFE, u16 width, u32 row}, then one grey byte per pixel. */
+    @Test
+    fun wefaxRowIsNotAJpegOrAWaterfall() {
+        val grey = byteArrayOf(0, 127, 255.toByte())
+        val bytes = ByteBuffer.allocate(8 + grey.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putShort(0xFFFE.toShort())
+            .putShort(grey.size.toShort())
+            .putInt(42)
+            .put(grey)
+            .array()
+        val event = PanelProtocol.parseBinary(bytes) as PanelEvent.WeFaxRow
+        assertEquals(42L, event.row.number)
+        assertArrayEquals(grey, event.row.grey)
+        assertNull(PanelProtocol.parseAppWaterfall(bytes))
+        assertNull(PanelProtocol.parseScreenFrame(bytes))
+        assertNull(PanelProtocol.parseSpectrum(bytes))
+
+        val line = PanelProtocol.parseLine(
+            """wefax {"open":1,"auto":0,"fax":1,"tx":0,"txp":0,"gen":2,"rows":3,"freq":1,"saves":0,"station":"X","saved":"a.png","plan":0,"next":""}""",
+        )
+        val status = (line as PanelEvent.WeFax).status
+        assertTrue(status.fax)
+        assertEquals("a.png", status.saved)
+        assertEquals("wefax rows 1", radio.kd0cq.x6100.digital.WeFaxProtocol.rows(true))
+        assertEquals("wefax open", radio.kd0cq.x6100.digital.WeFaxProtocol.command("open"))
     }
 
     @Test

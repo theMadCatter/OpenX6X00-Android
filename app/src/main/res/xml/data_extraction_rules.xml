@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What a reinstall may restore, on Android 12 and later.
+  Same rule as backup_rules.xml: the last host in radio_face can come back,
+  and the pairing token, the QRZ password and the local log do not.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="radio_link.xml" />
+        <exclude domain="sharedpref" path="qrz_secrets.xml" />
+        <exclude domain="database" path="qso-log.db" />
+        <exclude domain="database" path="qso-log.db-shm" />
+        <exclude domain="database" path="qso-log.db-wal" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="radio_link.xml" />
+        <exclude domain="sharedpref" path="qrz_secrets.xml" />
+        <exclude domain="database" path="qso-log.db" />
+        <exclude domain="database" path="qso-log.db-shm" />
+        <exclude domain="database" path="qso-log.db-wal" />
+    </device-transfer>
+</data-extraction-rules>

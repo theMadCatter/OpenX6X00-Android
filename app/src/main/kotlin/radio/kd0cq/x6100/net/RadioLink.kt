@@ -13,6 +13,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import radio.kd0cq.x6100.core.PairingController
+import radio.kd0cq.x6100.digital.AppWaterfallPaint
+import radio.kd0cq.x6100.digital.Js8Protocol
+import radio.kd0cq.x6100.digital.Js8Row
+import radio.kd0cq.x6100.digital.Js8Status
+import radio.kd0cq.x6100.digital.WeFaxProtocol
+import radio.kd0cq.x6100.digital.WeFaxScan
+import radio.kd0cq.x6100.digital.WeFaxStatus
 
 /** One connection to one radio: where it came from, and where its two servers answered. */
 data class RadioConnection(
@@ -36,7 +44,7 @@ data class RadioConnection(
 class RadioLink(
     val panel: PanelClient,
     val tci: TciClient,
-    val audio: AudioSink = NoOpAudioSink,
+    val audio: AudioSinkRouter = AudioSinkRouter(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val tokens: PanelTokenStore = MemoryPanelTokenStore(),
 ) {
@@ -65,6 +73,29 @@ class RadioLink(
     /** Who holds the radio's controls: none, the radio itself, a TCI client or a named browser. */
     val control: StateFlow<ControlInfo> = _control.asStateFlow()
 
+    /** The pairing machine's latest answer, published for the screens. */
+    private val _pairing = MutableStateFlow(PairingController.Status())
+
+    /**
+     * Pairing, role and controls in one machine, fed every line the radio answers.
+     *
+     * The client already keeps the token and sends it at each connection; this is what watches what
+     * becomes of it. A token the radio has forgotten ("err unknown session") or a session an admin
+     * revoked is dropped here the moment the radio says so — otherwise every later connection comes
+     * back a viewer, presses a key that is refused, and the operator has no idea why.
+     */
+    private val pairing = PairingController(
+        send = { line -> panel.sendChecked(line) },
+        tokens = tokens,
+        listener = { status, _ -> _pairing.value = status },
+    )
+
+    /** Whether we are paired, what the radio lets us do, and who holds the controls. */
+    val pairingState: StateFlow<PairingController.Status> = _pairing.asStateFlow()
+
+    /** Enough to press the key: a pairing, a role that may operate, and TX allowed to this session. */
+    val canTransmit: Boolean get() = pairing.status().canTransmit
+
     private val _bands = MutableStateFlow<List<Band>>(emptyList())
     val bands: StateFlow<List<Band>> = _bands.asStateFlow()
 
@@ -82,10 +113,65 @@ class RadioLink(
     private val _ft8Status = MutableStateFlow<Ft8Status?>(null)
     val ft8Status: StateFlow<Ft8Status?> = _ft8Status.asStateFlow()
 
+    private val _js8Rows = MutableStateFlow<List<Js8Row>>(emptyList())
+
+    /**
+     * Decoded JS8 messages, oldest first. A line whose id is already here replaces
+     * that row, because the radio rewrites a message while it is still arriving.
+     * The last [JS8_ROWS_KEPT] are what a new connection is replayed.
+     */
+    val js8Rows: StateFlow<List<Js8Row>> = _js8Rows.asStateFlow()
+
+    private val _js8Status = MutableStateFlow<Js8Status?>(null)
+
+    /** The JS8 app's switches, offsets and note. Null until the radio has sent a `js8` line. */
+    val js8Status: StateFlow<Js8Status?> = _js8Status.asStateFlow()
+
+    private val _appWaterfall = MutableStateFlow<List<AppWaterfallFrame>>(emptyList())
+
+    /**
+     * App-waterfall lines, oldest first.
+     *
+     * The radio has one `appwf` flag for both `ft8 wf` and `js8 wf`. The phone
+     * keeps one buffer and the screen that is open is the one that asked.
+     * Opening either screen clears it, so FT4 rows are not drawn as JS8.
+     */
+    val appWaterfall: StateFlow<List<AppWaterfallFrame>> = _appWaterfall.asStateFlow()
+
+    private val _js8NeedsFirmware = MutableStateFlow(false)
+
+    /**
+     * True after the radio answers "err unknown command js8". A later `js8` or
+     * `js8r` line clears it: that radio has the command. A refusal of one send
+     * ("err js8 send: ...") does not set it.
+     */
+    val js8NeedsFirmware: StateFlow<Boolean> = _js8NeedsFirmware.asStateFlow()
+
     private val _cwLines = MutableStateFlow<List<String>>(emptyList())
 
-    /** The CW decoder's text, newest last. */
+    /**
+     * The CW decoder's text, newest last.
+     *
+     * The scope does not paint this. A line of decode along the bottom of every
+     * layout covered the band plan and the last waterfall rows. The CW screen
+     * reads these lines. The spectrum layouts still do not.
+     */
     val cwLines: StateFlow<List<String>> = _cwLines.asStateFlow()
+
+    private val _wefax = MutableStateFlow<WeFaxStatus?>(null)
+
+    /** The WeFax app's state. Null until the radio has sent a `wefax` line. */
+    val wefax: StateFlow<WeFaxStatus?> = _wefax.asStateFlow()
+
+    private val _wefaxRows = MutableStateFlow<List<WeFaxScan>>(emptyList())
+
+    /**
+     * Grey scan lines, oldest first, while the WeFax screen has asked for them.
+     * A new generation, or a line of a different width, starts the picture over.
+     */
+    val wefaxRows: StateFlow<List<WeFaxScan>> = _wefaxRows.asStateFlow()
+
+    private var wefaxGeneration = Long.MIN_VALUE
 
     private val _receipts = MutableStateFlow<List<LoggedReceipt>>(emptyList())
 
@@ -135,6 +221,17 @@ class RadioLink(
     /** The last word the radio gave us, error or not, for the UI's status line. */
     val lastAnswer: StateFlow<String?> = _lastAnswer.asStateFlow()
 
+    private val _fault = MutableStateFlow<String?>(null)
+
+    /**
+     * The err line the operator still has to read.
+     *
+     * lastAnswer is every word, including a TCI frequency. This one is only
+     * a panel failure, and [RadioFault.keep] refuses to let a frequency
+     * report replace it. The radio face, FT8 and JS8 read this.
+     */
+    val fault: StateFlow<String?> = _fault.asStateFlow()
+
     val lastError: StateFlow<String?> = panel.lastError
 
     val endpoint: RadioEndpoint? get() = _connection.value.endpoint
@@ -146,8 +243,19 @@ class RadioLink(
     @Volatile
     var screenFramesWanted: Boolean = false
 
+    /**
+     * The screen is off or another app is in front. [screenFramesWanted] stays as the
+     * operator left it, so coming back can ask again. While this is set, a new request
+     * is remembered and not sent: the radio should not start JPEGs into a pocket.
+     */
+    @Volatile
+    private var picturesPaused: Boolean = false
+
     init {
         collectPanel()
+        collectFrames()
+        collectAppFrames()
+        collectFaxFrames()
         collectTci()
         watchPhases()
     }
@@ -187,8 +295,32 @@ class RadioLink(
     /** Turn the radio's screen frames on or off for us, and tell it which picture it should send. */
     fun wantScreenFrames(on: Boolean, picture: PanelCommands.Picture? = null) {
         screenFramesWanted = on
+        // A backgrounded phone keeps the wish and does not ask. resumePictures sends it.
+        if (picturesPaused) return
         send(PanelCommands.screen(on))
         picture?.let { send(PanelCommands.picture(it)) }
+    }
+
+    /**
+     * Stop framebuffer JPEGs while nothing is drawing them.
+     *
+     * `screen 0` is the firmware's off switch (`PanelCommands.screen`). The scope
+     * itself is not a radio command: the pane stops collecting. This only tells
+     * the radio to stop the mirror. Called again, it does not send a second off.
+     */
+    fun pausePictures() {
+        if (picturesPaused) return
+        picturesPaused = true
+        // Only while the panel is up. A send with no socket writes "the radio is not reached"
+        // into the status line, which is not what leaving the screen means.
+        if (screenFramesWanted && _connection.value.panel.online) send(PanelCommands.screen(false))
+    }
+
+    /** Ask for the mirror again, if the screen tab still wanted it when we left. */
+    fun resumePictures() {
+        if (!picturesPaused) return
+        picturesPaused = false
+        if (screenFramesWanted && _connection.value.panel.online) send(PanelCommands.screen(true))
     }
 
     private fun collectPanel() {
@@ -204,7 +336,15 @@ class RadioLink(
                     is PanelEvent.Meter -> _meters.value = event.db
                     is PanelEvent.TxMeters -> _txMeters.value = event.meters
                     is PanelEvent.Role -> _role.value = event.role
-                    is PanelEvent.ControlHeld -> _control.value = event.info
+                    is PanelEvent.ControlHeld -> {
+                        _control.value = event.info
+                        // Holding the controls is the end of "err busy" and "err view only".
+                        // Someone else taking them leaves the refusal where it is.
+                        _fault.value = RadioFault.keep(
+                            _fault.value,
+                            if (event.info.mine) RadioFault.Kind.CONTROL_MINE else RadioFault.Kind.OTHER,
+                        )
+                    }
                     is PanelEvent.Transmitting -> _state.value?.let { state ->
                         _state.value = state.copy(transmitting = event.on)
                     }
@@ -213,19 +353,95 @@ class RadioLink(
                     is PanelEvent.Spots -> _spots.value = event.spots
                     is PanelEvent.DecodedFt8Row -> _ft8Rows.value = (_ft8Rows.value + event.row).takeLast(FT8_ROWS_KEPT)
                     is PanelEvent.Ft8 -> _ft8Status.value = event.status
+                    is PanelEvent.DecodedJs8 -> {
+                        _js8Rows.value = Js8Protocol.upsert(_js8Rows.value, event.row, JS8_ROWS_KEPT)
+                        _js8NeedsFirmware.value = false
+                    }
+                    is PanelEvent.Js8 -> {
+                        _js8Status.value = event.status
+                        _js8NeedsFirmware.value = false
+                    }
                     is PanelEvent.Cw -> _cwLines.value = (_cwLines.value + event.text).takeLast(CW_LINES_KEPT)
+                    is PanelEvent.WeFax -> {
+                        if (event.status.generation != wefaxGeneration) {
+                            wefaxGeneration = event.status.generation
+                            _wefaxRows.value = emptyList()
+                        }
+                        _wefax.value = event.status
+                    }
                     is PanelEvent.Logged -> _receipts.value = (_receipts.value + event.receipt).takeLast(RECEIPTS_KEPT)
                     is PanelEvent.Sessions -> _sessions.value = event.sessions
-                    is PanelEvent.Spectrum -> _spectrum.value = event.frame
-                    is PanelEvent.Screen -> _screen.value = event.frame
+                    is PanelEvent.Spectrum, is PanelEvent.Screen, is PanelEvent.AppWaterfall,
+                    is PanelEvent.WeFaxRow,
+                    -> Unit
                     is PanelEvent.Paired -> {
                         _lastAnswer.value = "paired as ${event.role.wire}"
                         _role.value = RoleInfo(event.role, event.txAllowed, _role.value.sessionName)
                     }
 
-                    is PanelEvent.Failure -> _lastAnswer.value = event.text
+                    is PanelEvent.Failure -> {
+                        _lastAnswer.value = event.text
+                        // The face reads fault, not lastAnswer. A later notice still
+                        // updates the status word and does not clear this.
+                        _fault.value = RadioFault.keep(_fault.value, RadioFault.Kind.FAILURE, event.text)
+                        if (Js8Protocol.needsNewerFirmware(event.text)) _js8NeedsFirmware.value = true
+                    }
                     is PanelEvent.Notice -> _lastAnswer.value = event.text
                     is PanelEvent.Pong -> Unit
+                }
+            }
+        }
+    }
+
+    /** Pictures only. Kept off [collectPanel] so a JPEG cannot sit in front of `ctl` or `tx`. */
+    private fun collectFrames() {
+        scope.launch {
+            panel.frames.collect { event ->
+                when (event) {
+                    // The header's bin count is what arrived. Today panel_thread always sends
+                    // WATERFALL_NFFT (1024) int8 bins, when the DSP has a new frame, and skips
+                    // one while 16 KB is still queued. There is no command for a larger FFT or
+                    // a higher rate. The painter maps these bins onto the pane; it does not
+                    // invent bins the socket did not send.
+                    is PanelEvent.Spectrum -> _spectrum.value = event.frame
+                    is PanelEvent.Screen -> _screen.value = event.frame
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    /**
+     * The JS8 and FT8 waterfall. A spectrum frame never replaces one of these.
+     *
+     * The list stays oldest-first. The painter puts the last frame on the top
+     * pixel and walks older frames down, one pixel each. [AppWaterfallPaint.KEPT]
+     * is long enough for that to fill a phone pane. 96 lines was the old cap,
+     * and the painter stretched those 96 across the whole pane.
+     */
+    private fun collectAppFrames() {
+        scope.launch {
+            panel.appFrames.collect { event ->
+                if (event is PanelEvent.AppWaterfall) {
+                    _appWaterfall.value = (_appWaterfall.value + event.frame).takeLast(AppWaterfallPaint.KEPT)
+                }
+            }
+        }
+    }
+
+    /** The screen that is about to ask for a waterfall starts from an empty picture. */
+    fun clearAppWaterfall() {
+        _appWaterfall.value = emptyList()
+    }
+
+    private fun collectFaxFrames() {
+        scope.launch {
+            panel.faxFrames.collect { event ->
+                if (event is PanelEvent.WeFaxRow) {
+                    val row = event.row
+                    val current = _wefaxRows.value
+                    val sameWidth = current.firstOrNull()?.grey?.size == row.grey.size
+                    _wefaxRows.value = (if (sameWidth) current + row else listOf(row)).takeLast(WeFaxProtocol.ROWS_KEPT)
                 }
             }
         }
@@ -235,7 +451,16 @@ class RadioLink(
         scope.launch {
             tci.events.collect { event ->
                 when (event) {
-                    is TciEvent.Frequency -> _lastAnswer.value = "TCI at ${event.hertz} Hz"
+                    is TciEvent.Frequency -> {
+                        // The dial already shows this. Writing it over an err line
+                        // was how "err view only" vanished before anyone read it.
+                        _lastAnswer.value = "TCI at ${event.hertz} Hz"
+                        _fault.value = RadioFault.keep(
+                            _fault.value,
+                            RadioFault.Kind.TCI_FREQUENCY,
+                            "TCI at ${event.hertz} Hz",
+                        )
+                    }
                     else -> Unit
                 }
             }
@@ -257,6 +482,7 @@ class RadioLink(
 
     private companion object {
         const val FT8_ROWS_KEPT = 48
+        const val JS8_ROWS_KEPT = Js8Protocol.ROWS_KEPT
         const val CW_LINES_KEPT = 64
         const val RECEIPTS_KEPT = 20
     }
@@ -267,9 +493,19 @@ interface AudioSink {
     fun receive(frame: TciAudioFrame)
 }
 
-/** Until [AudioPipeline] is wired, the receiver's audio is read and dropped. */
-object NoOpAudioSink : AudioSink {
-    override fun receive(frame: TciAudioFrame) = Unit
+/**
+ * The link's sink, with the sink behind it changeable after the link is built.
+ *
+ * The link is built before the app's audio is: [RadioLinks] makes it on the first look at the radio,
+ * and the [radio.kd0cq.x6100.audio.AndroidAudioPipeline] that owns the phone's audio devices belongs
+ * to [radio.kd0cq.x6100.service.RadioRigs], which decides when the microphone and the speaker may be
+ * opened at all. So the link holds this, and the rig puts the pipeline behind it. Null means the
+ * frames are read and dropped, which is what a preview and a test link do.
+ */
+class AudioSinkRouter(@Volatile var delegate: AudioSink? = null) : AudioSink {
+    override fun receive(frame: TciAudioFrame) {
+        delegate?.receive(frame)
+    }
 }
 
 /** The link the app uses. The service starts it; the screens read it. */
