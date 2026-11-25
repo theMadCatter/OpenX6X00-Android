@@ -795,3 +795,25 @@ An unpaired phone is a view session (`role view`, `tx=0`). `canOperate` is false
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **265 tests, 0 failures, 0 errors, 0 skipped**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device. PTT, Tune, the digital words, the band tables and the unkey are unchanged.
+
+## The FT8 and JS8 waterfalls were stretched
+
+**What I found**
+
+`Ft8Waterfall` and `AppWaterfallPicture` set `rowH = size.height / shown.size`. A handful of frames became rows about 70 px tall, and `APP_WF_ROWS = 96` meant a full history was still about 7 px a row. The list is oldest-first and index 0 was drawn at the top, so the newest line sat at the bottom. `lv_waterfall` in `app_waterfall.c`, which `ft8_window.c` and the JS8 window embed, scrolls one pixel per line, newest at the top, and leaves the rest of the pane black.
+
+The FT8 call lane placed every label at y = 0. On the wide landscape strip, two calls a few hertz apart painted on the same baseline.
+
+**What changed**
+
+- The row is 1 canvas pixel, not 1 dp. On the S24 the density is about 2.8, so 1 dp is about 3 px and would bring the blocks back. The newest frame is y = 0. A y with no frame stays opaque black. The pane height is never divided by the line count.
+- `APP_WF_ROWS` is gone. The socket keeps `AppWaterfallPaint.KEPT`, 2048 lines. That is at least 1024, and it is enough for a portrait FT8 pane on a 1080×2340 screen. A pane taller than the history stays black at the bottom.
+- The 0 to 30 dB Gauss index is unchanged: the value is coerced into 0..30 and scaled with `* 255 / 30`. JS8 keeps its green 0 to 30 ramp. A pixel's bin is `floor(x / (width / bins))`, which is the column the old overlapping rects left on that pixel.
+- Both pictures draw one density-none bitmap. A new line is rasterized once into a ring, newest at index 0, and the visible rows are copied in. `FilterQuality.None` keeps one stored pixel as one screen pixel. The finder band, the cursor, the ticks, the markers, the on-air border, the Hz readout and the JS8 lane labels stay on top of that bitmap.
+- A wide FT8 window gives the call lane two rows, 40 dp, and clips the strip. Portrait stays the one 26 dp row and drops a label that collides. TX is listed first, so it keeps the top row.
+
+`onePixelPerLineNewestAtTheTopAndTheRestStaysEmpty`, `horizontalBinsStayTheColumnsTheRectsUsed`, `aNewLineIsOneAddedFrameAndAClearedListIsRebuilt` and `laneLabelsThatShareAnEdgeTakeTheNextRow` lock the geometry.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **269 tests, 0 failures, 0 errors, 0 skipped**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device. The main scope waterfall, PTT, Tune, the digital words, the band tables, the unkey and the take-control wording are unchanged.

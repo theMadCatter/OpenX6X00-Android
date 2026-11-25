@@ -15,6 +15,7 @@
 
 package radio.kd0cq.x6100.ui.screens
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,11 +41,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
@@ -52,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import radio.kd0cq.x6100.digital.AppWaterfallPaint
 import radio.kd0cq.x6100.digital.Js8Look
 import radio.kd0cq.x6100.digital.waterfallTicks
 import radio.kd0cq.x6100.digital.waterfallX
@@ -227,10 +234,13 @@ data class LaneMark(val hz: Int, val label: String, val color: Color)
  * The JS8 app waterfall.
  *
  * The bytes are dB over the noise floor. js8_window.c runs the palette from
- * the floor to 30 dB over it. A red border is that window's "on the air"
- * border. The vertical lines are the TX offset and the selected station.
- * FT8's finder is a band of the signal's width on the main waterfall
- * palette, drawn by Ft8Screen, not by this picture.
+ * the floor to 30 dB over it. That green ramp is unchanged. What changed is
+ * the geometry: each line is one pixel, the newest line is the top pixel,
+ * and a pixel with no line yet stays black. The old canvas divided the pane
+ * height by the number of lines, so a short history was a stack of blocks.
+ * A red border is that window's "on the air" border. The vertical lines are
+ * the TX offset and the selected station. FT8's finder is a band of the
+ * signal's width on the Gauss palette, drawn by Ft8Screen, not by this picture.
  */
 @Composable
 fun AppWaterfallPicture(
@@ -242,30 +252,24 @@ fun AppWaterfallPicture(
     empty: String,
 ) {
     val latest = frames.lastOrNull()
+    val ink = remember {
+        IntArray(Js8Look.WF_MAX_DB + 1) { db -> waterfallBin(db).toArgb() }
+    }
     Box(
         Modifier
             .fillMaxSize()
+            .background(Color.Black)
             .then(if (sending) Modifier.border(3.dp, RfGuru.tx) else Modifier),
     ) {
         if (frames.isEmpty()) {
             Text(empty, color = RfGuru.dim, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
         } else {
-            Canvas(Modifier.fillMaxSize()) {
-                val shown = frames.takeLast(size.height.toInt().coerceAtLeast(1))
-                if (shown.isEmpty()) return@Canvas
-                val rowH = size.height / shown.size
-                shown.forEachIndexed { index, frame ->
-                    val bins = frame.bins.coerceAtLeast(1)
-                    val binW = size.width / bins
-                    for (bin in frame.db.indices) {
-                        drawRect(
-                            color = waterfallBin(frame.db[bin].toInt()),
-                            topLeft = Offset(bin * binW, index * rowH),
-                            size = Size(binW + 1f, rowH + 1f),
-                        )
-                    }
-                }
-                val low = latest?.lowHz ?: return@Canvas
+            AppWaterfallBitmap(
+                frames = frames,
+                colorOf = { db -> ink[db.coerceIn(0, ink.lastIndex)] },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val low = latest?.lowHz ?: return@AppWaterfallBitmap
                 val high = latest.highHz
                 waterfallTicks(low, high).forEach { tick ->
                     val x = waterfallX(tick, low, high, size.width) ?: return@forEach
@@ -317,4 +321,139 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.marker(
 private fun waterfallBin(db: Int): Color {
     val v = db.coerceIn(0, Js8Look.WF_MAX_DB) / Js8Look.WF_MAX_DB.toFloat()
     return Color(0.04f + v * 0.95f, 0.10f + v * 0.55f, 0.02f)
+}
+
+/**
+ * Shared picture for the FT8 and JS8 waterfalls.
+ *
+ * Before, both canvases issued one drawRect per bin per line and set the
+ * rect's height to paneHeight / lineCount. A few hundred bins at 15 Hz is
+ * hundreds of thousands of rects, and a short history was stretched until
+ * it looked like blocks. This writes one density-none bitmap. A new line
+ * is rasterized once into a ring (newest at index 0) and the visible rows
+ * are copied into the bitmap. Pixels below the lines received so far stay
+ * opaque black. The bitmap is drawn with no filter, so one stored pixel
+ * stays one screen pixel. One dp per line would be about three pixels on
+ * the S24 and would bring the blocks back.
+ */
+@Composable
+internal fun AppWaterfallBitmap(
+    frames: List<AppWaterfallFrame>,
+    colorOf: (Int) -> Int,
+    modifier: Modifier = Modifier,
+    overlay: DrawScope.() -> Unit = {},
+) {
+    val sheet = remember { AppWaterfallSheet() }
+    Canvas(modifier) {
+        val image = sheet.paint(
+            frames = frames,
+            width = size.width.toInt(),
+            height = size.height.toInt(),
+            colorOf = colorOf,
+        )
+        if (image != null) {
+            drawImage(
+                image = image,
+                dstSize = IntSize(image.width, image.height),
+                filterQuality = FilterQuality.None,
+            )
+        }
+        overlay()
+    }
+}
+
+private class AppWaterfallSheet {
+    private var rowWidth = 0
+    /** Newest line at index 0. Each row is [rowWidth] packed colours. */
+    private val ring = ArrayDeque<IntArray>()
+    private var anchor: List<AppWaterfallFrame> = emptyList()
+    private var bitmap: Bitmap? = null
+    private var image: androidx.compose.ui.graphics.ImageBitmap? = null
+    private var pixels = IntArray(0)
+    private var paintedWidth = 0
+    private var paintedHeight = 0
+    private var paintedAnchor: List<AppWaterfallFrame>? = null
+
+    fun paint(
+        frames: List<AppWaterfallFrame>,
+        width: Int,
+        height: Int,
+        colorOf: (Int) -> Int,
+    ): androidx.compose.ui.graphics.ImageBitmap? {
+        if (width <= 0 || height <= 0) return null
+        if (frames.isEmpty()) {
+            ring.clear()
+            anchor = frames
+            paintedAnchor = null
+            return null
+        }
+        val widthChanged = width != rowWidth
+        if (widthChanged) {
+            rowWidth = width
+            ring.clear()
+            anchor = emptyList()
+        }
+        val added = if (widthChanged) -1 else AppWaterfallPaint.addedCount(anchor, frames)
+        if (added < 0) {
+            ring.clear()
+            val from = (frames.size - AppWaterfallPaint.KEPT).coerceAtLeast(0)
+            for (index in frames.lastIndex downTo from) {
+                ring.addLast(raster(frames[index], rowWidth, colorOf))
+            }
+        } else if (added > 0) {
+            for (index in (frames.size - added) until frames.size) {
+                ring.addFirst(raster(frames[index], rowWidth, colorOf))
+            }
+            while (ring.size > AppWaterfallPaint.KEPT) ring.removeLast()
+        }
+        anchor = frames
+        val bmp = bitmap
+        if (added == 0 && bmp != null && paintedWidth == width && paintedHeight == height && paintedAnchor === frames) {
+            return image
+        }
+        val target = ensure(width, height)
+        val need = width * height
+        if (pixels.size != need) pixels = IntArray(need)
+        // 0 is transparent. The unused pane has to be the radio's black, not a hole.
+        pixels.fill(OPAQUE_BLACK)
+        val rows = minOf(height, ring.size)
+        for (y in 0 until rows) {
+            val row = ring.elementAt(y)
+            if (row.size == width) row.copyInto(pixels, destinationOffset = y * width)
+        }
+        target.setPixels(pixels, 0, width, 0, 0, width, height)
+        paintedWidth = width
+        paintedHeight = height
+        paintedAnchor = frames
+        return image
+    }
+
+    private fun ensure(width: Int, height: Int): Bitmap {
+        var bmp = bitmap
+        if (bmp == null || bmp.width != width || bmp.height != height) {
+            // DENSITY_NONE: otherwise one stored pixel becomes density/160 screen pixels
+            // and the one-pixel lines would be stretched again on the way to the screen.
+            bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bmp.density = Bitmap.DENSITY_NONE
+            bitmap = bmp
+            image = bmp.asImageBitmap()
+        }
+        return bmp
+    }
+
+    private fun raster(frame: AppWaterfallFrame, width: Int, colorOf: (Int) -> Int): IntArray {
+        val row = IntArray(width) { OPAQUE_BLACK }
+        val bins = frame.bins.coerceAtLeast(1)
+        val db = frame.db
+        if (db.isEmpty()) return row
+        for (x in 0 until width) {
+            val bin = AppWaterfallPaint.binIndex(x, width, bins)
+            if (bin < db.size) row[x] = colorOf(db[bin].toInt())
+        }
+        return row
+    }
+
+    private companion object {
+        const val OPAQUE_BLACK = 0xFF000000.toInt()
+    }
 }
