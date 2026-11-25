@@ -220,6 +220,17 @@ class RadioLink(
     /** The last word the radio gave us, error or not, for the UI's status line. */
     val lastAnswer: StateFlow<String?> = _lastAnswer.asStateFlow()
 
+    private val _fault = MutableStateFlow<String?>(null)
+
+    /**
+     * The err line the operator still has to read.
+     *
+     * lastAnswer is every word, including a TCI frequency. This one is only
+     * a panel failure, and [RadioFault.keep] refuses to let a frequency
+     * report replace it. The radio face, FT8 and JS8 read this.
+     */
+    val fault: StateFlow<String?> = _fault.asStateFlow()
+
     val lastError: StateFlow<String?> = panel.lastError
 
     val endpoint: RadioEndpoint? get() = _connection.value.endpoint
@@ -324,7 +335,15 @@ class RadioLink(
                     is PanelEvent.Meter -> _meters.value = event.db
                     is PanelEvent.TxMeters -> _txMeters.value = event.meters
                     is PanelEvent.Role -> _role.value = event.role
-                    is PanelEvent.ControlHeld -> _control.value = event.info
+                    is PanelEvent.ControlHeld -> {
+                        _control.value = event.info
+                        // Holding the controls is the end of "err busy" and "err view only".
+                        // Someone else taking them leaves the refusal where it is.
+                        _fault.value = RadioFault.keep(
+                            _fault.value,
+                            if (event.info.mine) RadioFault.Kind.CONTROL_MINE else RadioFault.Kind.OTHER,
+                        )
+                    }
                     is PanelEvent.Transmitting -> _state.value?.let { state ->
                         _state.value = state.copy(transmitting = event.on)
                     }
@@ -361,6 +380,9 @@ class RadioLink(
 
                     is PanelEvent.Failure -> {
                         _lastAnswer.value = event.text
+                        // The face reads fault, not lastAnswer. A later notice still
+                        // updates the status word and does not clear this.
+                        _fault.value = RadioFault.keep(_fault.value, RadioFault.Kind.FAILURE, event.text)
                         if (Js8Protocol.needsNewerFirmware(event.text)) _js8NeedsFirmware.value = true
                     }
                     is PanelEvent.Notice -> _lastAnswer.value = event.text
@@ -421,7 +443,16 @@ class RadioLink(
         scope.launch {
             tci.events.collect { event ->
                 when (event) {
-                    is TciEvent.Frequency -> _lastAnswer.value = "TCI at ${event.hertz} Hz"
+                    is TciEvent.Frequency -> {
+                        // The dial already shows this. Writing it over an err line
+                        // was how "err view only" vanished before anyone read it.
+                        _lastAnswer.value = "TCI at ${event.hertz} Hz"
+                        _fault.value = RadioFault.keep(
+                            _fault.value,
+                            RadioFault.Kind.TCI_FREQUENCY,
+                            "TCI at ${event.hertz} Hz",
+                        )
+                    }
                     else -> Unit
                 }
             }

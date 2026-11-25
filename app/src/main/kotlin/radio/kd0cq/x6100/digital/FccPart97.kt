@@ -91,6 +91,15 @@ object FccPart97 {
 
     const val TAKE_CONTROL = "Take control before transmitting."
 
+    /**
+     * A view session, and a phone that has not paired. The link starts as
+     * view, so this is also the sentence before the first "paired" line.
+     */
+    const val PAIR_FIRST = "Pair this phone first."
+
+    /** The live control that opens the Pair screen. It is not a disabled Take control. */
+    const val PAIR_TO_CONTROL = "Pair this phone to take control"
+
     const val NO_TX = "This session is not allowed to transmit."
 
     const val CHOOSE_CLASS = "Choose a license class in Setup before transmitting."
@@ -188,14 +197,19 @@ object FccPart97 {
      * Before this, a digital word was checked against Advanced data only, and
      * turning a function off was trapped when the offset was already illegal.
      * [enabling] is false for the command that turns a transmission off. That
-     * command still needs Take control. It does not need the transmit flag or
-     * a legal frequency: an illegal offset, or a session whose transmit flag
-     * was just cleared, must not be what leaves the radio on the air.
+     * command still needs a session that can operate and holds control. It
+     * does not need the transmit flag or a legal frequency: an illegal offset,
+     * or a session whose transmit flag was just cleared, must not be what
+     * leaves the radio on the air.
      *
-     * A press that would key ([enabling] true) needs Take control, the
+     * A press that would key ([enabling] true) needs that same control, the
      * transmit flag, and then the table. The table is skipped when the
      * operator has turned it off. It refuses when no class is stored.
      * A missing edge is not zero.
+     *
+     * [canOperate] defaults to true so a caller that only knows "not holding"
+     * still gets [TAKE_CONTROL]. The view model passes the role. A view
+     * session, which is also an unpaired phone, is told to pair.
      */
     fun gate(
         enabling: Boolean,
@@ -207,8 +221,9 @@ object FccPart97 {
         highHz: Long?,
         missing: String,
         modeKnown: Boolean = true,
+        canOperate: Boolean = true,
     ): String? {
-        if (!holdingControls) return TAKE_CONTROL
+        controlWord(canOperate, holdingControls)?.let { return it }
         if (!enabling) return null
         if (!txAllowed) return NO_TX
         if (!choice.check) return null
@@ -219,6 +234,19 @@ object FccPart97 {
             return "That signal ($lowHz–$highHz Hz) is outside the US ${choice.license.label} ${emission.word} segments."
         }
         return null
+    }
+
+    /**
+     * The control sentence, or null when this session may transmit.
+     *
+     * Pair comes first. Take control is only for a session that can operate
+     * and does not hold the controls. A viewer who is told to take control
+     * taps a button the role will not enable.
+     */
+    fun controlWord(canOperate: Boolean, holdingControls: Boolean): String? = when {
+        !canOperate -> PAIR_FIRST
+        !holdingControls -> TAKE_CONTROL
+        else -> null
     }
 
     private fun sixtyMeter(): List<LongRange> =

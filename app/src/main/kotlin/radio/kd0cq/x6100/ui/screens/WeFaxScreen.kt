@@ -61,7 +61,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import radio.kd0cq.x6100.digital.FccPart97
 import radio.kd0cq.x6100.digital.FaxKey
+import radio.kd0cq.x6100.net.RadioFault
 import radio.kd0cq.x6100.digital.WeFaxProtocol
 import radio.kd0cq.x6100.digital.WeFaxScan
 import radio.kd0cq.x6100.digital.faxKeySends
@@ -77,11 +79,12 @@ private const val HINT = "Page 2: Freq., View   Page 3: Align, Tilt (MFK)   Page
 private val frameColor = Color(0xFF0C0E13)
 
 @Composable
-fun WeFaxScreen(viewModel: RadioViewModel, onBack: () -> Unit) {
+fun WeFaxScreen(viewModel: RadioViewModel, onBack: () -> Unit, onPair: () -> Unit = {}) {
     val status by viewModel.wefax.collectAsState()
     val rows by viewModel.wefaxRows.collectAsState()
     val role by viewModel.role.collectAsState()
     val control by viewModel.control.collectAsState()
+    val fault by viewModel.radioFault.collectAsState()
     var refusal by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableIntStateOf(0) }
     var view by remember { mutableStateOf(FaxView.BIG) }
@@ -118,7 +121,9 @@ fun WeFaxScreen(viewModel: RadioViewModel, onBack: () -> Unit) {
             TextButton(onClick = onBack) { Text("Back", color = RfGuru.goldText) }
         }
         Text(HINT, color = RfGuru.dim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp))
-        refusal?.let { Text(it, color = RfGuru.red, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp)) }
+        RadioFault.show(fault, refusal, separator = " · ")?.let {
+            Text(it, color = RfGuru.red, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+        }
         Box(
             Modifier
                 .weight(1f)
@@ -168,14 +173,18 @@ fun WeFaxScreen(viewModel: RadioViewModel, onBack: () -> Unit) {
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (!held) {
-                OutlinedButton(onClick = { viewModel.takeControl() }, enabled = role.canOperate) {
+            if (!role.canOperate) {
+                TextButton(onClick = onPair) {
+                    Text(FccPart97.PAIR_TO_CONTROL, maxLines = 1)
+                }
+            } else if (!held) {
+                OutlinedButton(onClick = { viewModel.takeControl() }) {
                     Text("Take control")
                 }
             }
             if (status?.open != true) {
                 OutlinedButton(
-                    onClick = { refusal = if (viewModel.wefaxOperate("open")) null else "Take control before this." },
+                    onClick = { refusal = if (viewModel.wefaxOperate("open")) null else viewModel.whyControlRefused() },
                     enabled = held,
                 ) { Text("Open") }
             }
@@ -196,15 +205,15 @@ fun WeFaxScreen(viewModel: RadioViewModel, onBack: () -> Unit) {
                     }
                     FaxKey.PLAN -> {
                         val word = if (status?.plan == true) "unplan" else "plan"
-                        refusal = if (viewModel.wefaxOperate(word)) null else "Take control before this."
+                        refusal = if (viewModel.wefaxOperate(word)) null else viewModel.whyControlRefused()
                     }
-                    FaxKey.CLOSE -> refusal = if (viewModel.wefaxOperate("close")) null else "Take control before this."
+                    FaxKey.CLOSE -> refusal = if (viewModel.wefaxOperate("close")) null else viewModel.whyControlRefused()
                     FaxKey.RX -> {
                         val word = if (status?.auto == true) "cont" else "auto"
-                        refusal = if (viewModel.wefaxOperate(word)) null else "Take control before this."
+                        refusal = if (viewModel.wefaxOperate(word)) null else viewModel.whyControlRefused()
                     }
-                    FaxKey.CLEAR -> refusal = if (viewModel.wefaxOperate("clear")) null else "Take control before this."
-                    FaxKey.SAVE -> refusal = if (viewModel.wefaxOperate("save")) null else "Take control before this."
+                    FaxKey.CLEAR -> refusal = if (viewModel.wefaxOperate("clear")) null else viewModel.whyControlRefused()
+                    FaxKey.SAVE -> refusal = if (viewModel.wefaxOperate("save")) null else viewModel.whyControlRefused()
                     else -> refusal = NOT_ON_PANEL
                 }
             },

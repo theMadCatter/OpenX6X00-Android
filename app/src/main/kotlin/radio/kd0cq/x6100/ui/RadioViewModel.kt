@@ -113,6 +113,13 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     /** The last word the radio gave us, "err ..." included. */
     val lastError: StateFlow<String?> = link.lastAnswer
 
+    /**
+     * An err line that a TCI frequency report is not allowed to replace.
+     * The radio face, FT8 and JS8 show this. lastError is still every word,
+     * so Setup's status line can keep moving.
+     */
+    val radioFault: StateFlow<String?> = link.fault
+
     private val _endpoint = MutableStateFlow<RadioEndpoint?>(null)
     val endpoint: StateFlow<RadioEndpoint?> = _endpoint.asStateFlow()
 
@@ -303,6 +310,7 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
             highHz = span?.second,
             missing = "The radio has not reported a dial frequency yet.",
             modeKnown = radio == null || emission != null,
+            canOperate = role.value.canOperate,
         )
     }
 
@@ -324,6 +332,7 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
             highHz = dial,
             missing = "The radio has not reported a dial frequency yet.",
             modeKnown = radio == null || emission != null,
+            canOperate = role.value.canOperate,
         )
     }
 
@@ -411,7 +420,13 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun setPower(tenthsOfWatt: Int): String? {
         if (!holdingControls()) {
-            val why = "Take control before changing power."
+            // A view session cannot take control. The operate session that
+            // does not hold it still hears the power sentence.
+            val why = if (role.value.canOperate) {
+                "Take control before changing power."
+            } else {
+                FccPart97.PAIR_FIRST
+            }
             _powerNote.value = why
             return why
         }
@@ -659,8 +674,20 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
             lowHz = low,
             highHz = high,
             missing = missing,
+            canOperate = role.value.canOperate,
         )
     }
+
+    /**
+     * What to say when a control the session cannot use was tapped.
+     *
+     * A view session, including a phone that has not paired, is told to pair.
+     * Take control is only for a session that can operate and does not hold
+     * the controls. When the session already holds them, the old sentence
+     * stays, for a command the radio still refused for another reason.
+     */
+    fun whyControlRefused(): String =
+        FccPart97.controlWord(role.value.canOperate, holdingControls()) ?: "Take control before this."
 
     /** The offset a txfreq line names, or null when it does not name one. */
     private fun ft8OffsetHz(line: String): Int? =

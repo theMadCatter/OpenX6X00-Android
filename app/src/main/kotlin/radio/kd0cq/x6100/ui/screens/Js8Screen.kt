@@ -72,7 +72,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import radio.kd0cq.x6100.digital.FccPart97
 import radio.kd0cq.x6100.digital.GhostNet
+import radio.kd0cq.x6100.net.RadioFault
 import radio.kd0cq.x6100.ui.LocalWideWindow
 import radio.kd0cq.x6100.digital.Js8Look
 import radio.kd0cq.x6100.digital.Js8Protocol
@@ -83,13 +85,14 @@ import radio.kd0cq.x6100.ui.theme.RfGuru
 private data class Js8Confirm(val title: String, val detail: String, val line: String, val enabling: Boolean = true)
 
 @Composable
-fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
+fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit, onPair: () -> Unit = {}) {
     val rows by viewModel.js8Rows.collectAsState()
     val status by viewModel.js8Status.collectAsState()
     val waterfall by viewModel.appWaterfall.collectAsState()
     val needsFirmware by viewModel.js8NeedsFirmware.collectAsState()
     val role by viewModel.role.collectAsState()
     val control by viewModel.control.collectAsState()
+    val fault by viewModel.radioFault.collectAsState()
     var draft by rememberSaveable { mutableStateOf("") }
     var showName by rememberSaveable { mutableStateOf(Js8Look.Show.ALL.name) }
     var region by rememberSaveable { mutableStateOf(viewModel.ghostnetGroup()) }
@@ -164,7 +167,7 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                 maxLines = if (wide) 1 else 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            refusal?.let {
+            RadioFault.show(fault, refusal, separator = " · ")?.let {
                 Text(it, color = RfGuru.red, fontSize = 12.sp, maxLines = if (wide) 1 else 3, overflow = TextOverflow.Ellipsis)
             }
         },
@@ -202,10 +205,25 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
             }
         },
         controls = {
-            if (!held) {
+            if (!role.canOperate) {
+                // The old button was disabled while the role was view, so a tap
+                // did nothing. This one opens Pair and stays inside the same
+                // 40 dp so the offset row is still on the first landscape frame.
+                TextButton(
+                    onClick = onPair,
+                    contentPadding = if (wide) PaddingValues(horizontal = 12.dp, vertical = 0.dp) else ButtonDefaults.ContentPadding,
+                    modifier = if (wide) Modifier.height(Js8Chrome.TAKE_CONTROL_DP.dp) else Modifier,
+                ) {
+                    Text(
+                        FccPart97.PAIR_TO_CONTROL,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = if (wide) 12.sp else 14.sp,
+                    )
+                }
+            } else if (!held) {
                 OutlinedButton(
                     onClick = { viewModel.takeControl() },
-                    enabled = role.canOperate,
                     contentPadding = if (wide) PaddingValues(horizontal = 12.dp, vertical = 0.dp) else ButtonDefaults.ContentPadding,
                     modifier = if (wide) Modifier.height(Js8Chrome.TAKE_CONTROL_DP.dp) else Modifier,
                 ) {
@@ -472,7 +490,7 @@ private fun laneOf(rows: List<Js8Row>, selected: String): List<LaneMark> {
 
 /** Open, close, speed, hold, stop, select, txfreq. A false result did not leave the phone. */
 private fun operate(viewModel: RadioViewModel, line: String, refusal: (String?) -> Unit) {
-    refusal(if (viewModel.js8Operate(line)) null else "Take control before this.")
+    refusal(if (viewModel.js8Operate(line)) null else viewModel.whyControlRefused())
 }
 
 /** A transmit word. [enabling] is false when the tap turns a transmission off. */

@@ -14,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import radio.kd0cq.x6100.net.PanelRole
 
 class FccPart97Test {
 
@@ -208,6 +209,83 @@ class FccPart97Test {
         assertNull(FccPart97.emissionOf(99))
         assertEquals(7.0, FccPart97.DIGITAL_TX_CAP_WATTS, 0.0)
         assertEquals(70, FccPart97.DIGITAL_CAP_TENTHS)
+    }
+
+    @Test
+    fun aViewOrUnpairedSessionIsToldToPair() {
+        // The link starts as view. An unknown role word is also view. Neither can operate.
+        assertFalse(PanelRole.View.canOperate)
+        assertFalse(PanelRole.None.canOperate)
+        assertFalse(PanelRole.fromWire("nope").canOperate)
+        assertEquals(FccPart97.PAIR_FIRST, "Pair this phone first.")
+        val refused = FccPart97.gate(
+            enabling = true,
+            choice = BandChoice(check = true, license = LicenseClass.EXTRA),
+            holdingControls = false,
+            txAllowed = false,
+            emission = Emission.PHONE,
+            lowHz = 14_200_000L,
+            highHz = 14_200_000L,
+            missing = "missing",
+            canOperate = false,
+        )
+        assertEquals(FccPart97.PAIR_FIRST, refused)
+        // Turning a transmission off still skips the band, but a viewer is not told to take control.
+        assertEquals(
+            FccPart97.PAIR_FIRST,
+            FccPart97.gate(
+                enabling = false,
+                choice = BandChoice(check = true, license = null),
+                holdingControls = false,
+                txAllowed = false,
+                emission = Emission.DATA,
+                lowHz = null,
+                highHz = null,
+                missing = "missing",
+                canOperate = false,
+            ),
+        )
+    }
+
+    @Test
+    fun takeControlIsOnlyForASessionThatCanOperateButDoesNotHoldIt() {
+        assertTrue(PanelRole.Operate.canOperate)
+        assertTrue(PanelRole.Admin.canOperate)
+        assertEquals(
+            FccPart97.TAKE_CONTROL,
+            FccPart97.controlWord(canOperate = true, holdingControls = false),
+        )
+        assertEquals(
+            FccPart97.TAKE_CONTROL,
+            FccPart97.gate(
+                enabling = true,
+                choice = BandChoice(check = false, license = null),
+                holdingControls = false,
+                txAllowed = true,
+                emission = Emission.DATA,
+                lowHz = null,
+                highHz = null,
+                missing = "missing",
+                canOperate = true,
+            ),
+        )
+        assertEquals(FccPart97.PAIR_FIRST, FccPart97.controlWord(canOperate = false, holdingControls = false))
+        assertEquals(FccPart97.PAIR_FIRST, FccPart97.controlWord(canOperate = false, holdingControls = true))
+        assertNull(FccPart97.controlWord(canOperate = true, holdingControls = true))
+        // Holding control still lets an off-command through, ahead of the band and the transmit flag.
+        assertNull(
+            FccPart97.gate(
+                enabling = false,
+                choice = BandChoice(check = true, license = null),
+                holdingControls = true,
+                txAllowed = false,
+                emission = Emission.DATA,
+                lowHz = 5_360_000L,
+                highHz = 5_360_050L,
+                missing = "missing",
+                canOperate = true,
+            ),
+        )
     }
 
     private fun covers(license: LicenseClass, emission: Emission, hz: Long, high: Long = hz): Boolean =
