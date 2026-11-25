@@ -17,6 +17,13 @@ By KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
 
 *The radio face in landscape, following the radio's RF.Guru layout. 40 m at 7.074 MHz, live spectrum and waterfall.*
 
+## Download
+
+A signed APK for this alpha is in
+[GitHub Releases](https://github.com/theMadCatter/OpenX6X00-Android/releases/latest).
+Sideload it on your phone, and allow installation from unknown sources if
+Android asks.
+
 ## What it does
 
 - **Radio face.** One screen laid out like the radio's RF.Guru UI: VFO A/B, mode, AGC,
@@ -65,8 +72,10 @@ By KD0CQ ([theMadCatter](https://github.com/theMadCatter)).
    The radio advertises itself as `x6100.local`. Its IP address is shown in
    **Settings > Wireless** (the WIFI card lists power, status, IP and networks).
    If `.local` does not resolve on the phone, type that IP instead.
-4. **Install the app.** For now, [build from source](#building). A signed APK
-   for download will be published in GitHub Releases.
+4. **Install the app.** Download the
+   [latest release APK](https://github.com/theMadCatter/OpenX6X00-Android/releases/latest)
+   and sideload it (allow installation from unknown sources if Android asks).
+   You can also [build from source](#building).
 5. **Connect.** Open the app, Search or enter the host, then **Connect to**
    that address. When the link is up, press **Open the radio**.
 6. **Pair.** A new session is view only until it is paired. Open **Pair**
