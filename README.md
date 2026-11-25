@@ -37,8 +37,8 @@ app/src/main/kotlin/radio/kd0cq/x6100/
   ptt/        PTT lease control with a fail-safe unkey
   discovery/  NSD browse for _tci._tcp / _http._tcp, manual host+port fallback
   service/    the foreground service that owns the connection
-  ui/         Compose screens: Connect, Pairing, Radio (RF.Guru face),
-              Screen, FT8, Spots, Log, Settings
+  ui/         Compose screens: Connect, Pairing, Waterfall, Controls,
+              FT8, Spots, Log, Settings
 app/src/test/ codec unit tests, built from the firmware's real lines and frames
 ```
 

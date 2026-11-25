@@ -21,7 +21,7 @@ class LoggerTest {
               <Callsign>
                 <call>KD0CQ</call>
                 <fname>KD0CQ</fname>
-                <name></name>
+                <name>KD0CQ</name>
                 <addr2>Springfield</addr2>
                 <state>MO</state>
                 <grid>EM37</grid>
@@ -40,7 +40,9 @@ class LoggerTest {
         assertEquals("session-key", full.sessionKey)
         assertTrue(full.subscribed)
         assertNull(full.error)
-        assertEquals("KD0CQ", full.call?.name)
+        // The sample used to carry a personal name. The tree keeps the callsign
+        // in both QRZ name fields, and the parser still joins the two parts.
+        assertEquals("KD0CQ KD0CQ", full.call?.name)
         assertEquals("Springfield, MO", full.call?.qth)
         assertEquals("EM37", full.call?.grid)
         assertEquals(37.2, full.call?.lat!!, 0.001)
@@ -107,7 +109,7 @@ class LoggerTest {
             timeUtcMs = 1_763_700_000_000L,
             rstSent = "59",
             rstRcvd = "57",
-            name = "Chris",
+            name = "KD0CQ",
             qth = "Springfield",
             grid = "em37",
             country = "United States",
@@ -117,7 +119,7 @@ class LoggerTest {
         assertTrue(QsoBook.workedBefore("kd0cq/m", listOf(qso)))
         assertFalse(QsoBook.workedBefore("W1AW", listOf(qso)))
         val line = QsoBook.radioText(qso)
-        assertEquals("KD0CQ/P|59|57|Chris|Springfield|EM37|United States", line)
+        assertEquals("KD0CQ/P|59|57|KD0CQ|Springfield|EM37|United States", line)
         val adif = QsoBook.adif(listOf(qso))
         assertTrue(adif.contains("<EOH>"))
         assertTrue(adif.contains("<CALL:7>KD0CQ/P"))

@@ -521,7 +521,7 @@ The ring is now `WaterfallHold` on `RadioViewModel`, the same place as the 3D `R
 
 ## Portrait spectrum height and waterfall chip overlap
 
-Chris (KD0CQ) approved two layout fixes on the same branch.
+KD0CQ approved two layout fixes on the same branch.
 
 **What was wrong**
 
@@ -541,7 +541,7 @@ Chris (KD0CQ) approved two layout fixes on the same branch.
 
 ## S24 landscape: LSB passband, spectrum share, scope height, meter readout
 
-Live check on Chris's (KD0CQ) S24 Ultra (SM-S928U1), landscape, about 2340×1080, radio in LSB at 3.844.000 on 80 m.
+Live check on KD0CQ's S24 Ultra (SM-S928U1), landscape, about 2340×1080, radio in LSB at 3.844.000 on 80 m.
 
 **What was wrong**
 
@@ -566,7 +566,7 @@ Live check on Chris's (KD0CQ) S24 Ultra (SM-S928U1), landscape, about 2340×1080
 
 ## JS8, GhostNet, and the connect field
 
-Chris (KD0CQ) approved a real JS8 screen on the same branch, on top of 5789a3e. The words are the ones OpenX6X00 v0.3.13 added in b2c837d.
+KD0CQ approved a real JS8 screen on the same branch, on top of 5789a3e. The words are the ones OpenX6X00 v0.3.13 added in b2c837d.
 
 **What was wrong**
 
@@ -685,5 +685,23 @@ The face clock is the phone, in UTC. It is not the radio's RTC, and it does not 
 `theHeaderClockIsPhoneUtcAndAMissingBatteryIsHidden`, the `bat: -1` parse, `lowBattery(-1)`, and `showButton` cover the sentinel, the UTC digits, and the two-line Show key.
 
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug` after this: **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.
+
+## Credit is the callsign, and the README matches main
+
+**What I found**
+
+The tree, the file headers, and the notes still named the operator as a personal name next to the callsign. The same personal name was in the QRZ sample and in one logged QSO name. `theMadCatter` was already the GitHub handle and had to stay. The README on this branch had put the personal name back into the byline. `main` (`0c7de1f`, "Update author attribution in README.md") already says `By KD0CQ` and keeps the handle. The path given for a newer draft, `/workspace/readme-draft/README.md`, is not on this machine. The clock and battery work does not change what the radio sends: `bat` is still on the state line, including -1, and there is still no time field, so the README Status line stays "Early work. Not yet usable on the air."
+
+**What changed**
+
+- Every credit that paired a personal name with the callsign is now `KD0CQ` (possessive sentences use `KD0CQ's`). Headers read `Copyright (C) 2026 KD0CQ (theMadCatter)`. The handle is unchanged.
+- `README.md` is the file from `main`, byte for byte. Status was not edited.
+- The QRZ fixture and the sample QSO name carry the callsign. The parser still joins the two QRZ name fields.
+
+Git history was not rewritten. Older commits still have the previous credit line.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.
