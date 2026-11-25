@@ -103,8 +103,17 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
     var pickingBands by remember { mutableStateOf(false) }
     var micRefused by remember { mutableStateOf(false) }
 
+    val license by viewModel.license.collectAsState()
+    val powerNote by viewModel.powerNote.collectAsState()
+    val tuning by viewModel.tuneKeyed.collectAsState()
     val canOperate = role.canOperate
-    val mayKey = canOperate && role.txAllowed
+    // Take control, the transmit flag and the band check. The hold is the question.
+    // license is read so a change in Setup recomposes this gate.
+    val voiceWhy = license.let { viewModel.voiceKeyRefusal() }
+    val tuneWhy = viewModel.tuneRefusal()
+    val mayKey = voiceWhy == null
+    val mayTune = tuneWhy == null
+    val gateNote = refusal ?: powerNote ?: voiceWhy ?: tuneWhy?.takeIf { !mayTune }
     val page = RadioFace.page(pageIndex)
     val radio = state
 
@@ -116,7 +125,11 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
         when (val command = RadioFace.commandFor(key, radio, volumeMax, direction)) {
             FaceCommand.NextPage -> pageIndex = RadioFace.nextPageIndex(pageIndex)
             FaceCommand.PreviousPage -> pageIndex = RadioFace.previousPageIndex(pageIndex)
-            is FaceCommand.SetInt -> sendIfAllowed { viewModel.send(PanelCommands.set(command.setting, command.value)) }
+            is FaceCommand.SetInt -> if (command.setting == PanelSettings.PWR) {
+                viewModel.setPower(command.value)
+            } else {
+                sendIfAllowed { viewModel.send(PanelCommands.set(command.setting, command.value)) }
+            }
             is FaceCommand.SetFilter -> sendIfAllowed { viewModel.setFilter(command.lowHz, command.highHz) }
             FaceCommand.PickMode -> pickingModes = true
             FaceCommand.PickBand -> pickingBands = true
@@ -151,7 +164,7 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                 audio = audio,
                 micRefused = micRefused,
                 onMicRefused = { micRefused = it },
-                note = refusal ?: audioProblem,
+                note = gateNote ?: audioProblem,
                 freqGroup = freqGroup,
                 page = page,
                 onFreqGroup = { freqGroupOrdinal = it.ordinal },
@@ -193,7 +206,7 @@ fun RadioScreen(viewModel: RadioViewModel, onNavigate: (String) -> Unit) {
                     keyed = keyed,
                     micRefused = micRefused,
                     onMicRefused = { micRefused = it },
-                    note = refusal ?: audioProblem,
+                    note = gateNote ?: audioProblem,
                 )
             }
         }
@@ -414,6 +427,8 @@ private fun LandscapeDeck(
 ) {
     // Same permission rule as the portrait TransmitRow: a refused microphone leaves the
     // radio's own mic selected, and the switch itself stays on canOperate, not on mayKey.
+    val tuning by viewModel.tuneKeyed.collectAsState()
+    val mayTune = viewModel.tuneRefusal() == null
     val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         onMicRefused(!granted)
         if (granted) viewModel.transmitAudioFromPhone = true
@@ -440,7 +455,18 @@ private fun LandscapeDeck(
                 mayKey = mayKey,
                 onPress = { viewModel.pressPtt() },
                 onRelease = { viewModel.releasePtt() },
-                modifier = Modifier.width(72.dp).height(52.dp),
+                modifier = Modifier.width(64.dp).height(52.dp),
+            )
+            HoldToTalk(
+                keyed = tuning,
+                mayKey = mayTune,
+                onPress = { viewModel.pressTune() },
+                onRelease = { viewModel.releaseTune() },
+                modifier = Modifier.width(52.dp).height(52.dp),
+                idle = "TUNE",
+                live = "TUNE",
+                description = "Hold to tune. This transmits a carrier.",
+                labelSize = 11.sp,
             )
             MicSwitch(
                 checked = viewModel.transmitAudioFromPhone,
@@ -754,6 +780,8 @@ private fun TransmitRow(
     note: String?,
     pttHeight: androidx.compose.ui.unit.Dp = 64.dp,
 ) {
+    val tuning by viewModel.tuneKeyed.collectAsState()
+    val mayTune = viewModel.tuneRefusal() == null
     val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         onMicRefused(!granted)
         if (granted) viewModel.transmitAudioFromPhone = true
@@ -766,6 +794,17 @@ private fun TransmitRow(
                 onPress = { viewModel.pressPtt() },
                 onRelease = { viewModel.releasePtt() },
                 modifier = Modifier.weight(1f).height(pttHeight),
+            )
+            HoldToTalk(
+                keyed = tuning,
+                mayKey = mayTune,
+                onPress = { viewModel.pressTune() },
+                onRelease = { viewModel.releaseTune() },
+                modifier = Modifier.width(72.dp).height(pttHeight),
+                idle = "TUNE",
+                live = "TUNE",
+                description = "Hold to tune. This transmits a carrier.",
+                labelSize = 13.sp,
             )
             MicSwitch(
                 checked = viewModel.transmitAudioFromPhone,

@@ -151,6 +151,13 @@ object PanelCommands {
     fun key(name: String, down: Boolean, lease: String? = null): String =
         if (lease != null) "key $name ${if (down) 1 else 0} $lease" else "key $name ${if (down) 1 else 0}"
 
+    /**
+     * The external-tuner lease. `tune 1 HOLD` starts it and renews it.
+     * `tune 0` stops a tune this client owns. HOLD is ignored on the way down.
+     * This is not `set atu`, which only enables the tuner and does not key.
+     */
+    fun tune(on: Boolean, hold: Long): String = if (on) "tune 1 $hold" else "tune 0"
+
     /** Turn a knob by N detents, negative the other way. The names are in panel.html's remoteKnob. */
     fun knob(name: String, detents: Int) = "knob $name $detents"
 

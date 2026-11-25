@@ -116,6 +116,12 @@ class MainActivity : ComponentActivity() {
             // A touch key while it is on uses release, which sends the up-command and does not
             // publish "this app went to the background". The 3 second lease is still the radio's
             // backstop if that write does not land. Nothing here keys the radio.
+            // FT8 and JS8 are the radio's engines, not the PTT lease. Leaving the
+            // screen stops them even when the link stays up. Tune is its own lease
+            // and is let go whether or not the PTT finger was down. A rotation is
+            // not this branch. Nothing here keys the radio.
+            rig.stopDigitalEngines()
+            rig.ptt.releaseTune()
             if (decision.announceWentToBackground) rig.ptt.wentToBackground()
             else if (decision.releaseTouchPtt) rig.ptt.release()
             if (decision.pausePictures) {

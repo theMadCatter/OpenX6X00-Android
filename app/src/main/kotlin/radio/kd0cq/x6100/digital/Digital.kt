@@ -343,39 +343,24 @@ object GhostNet {
 /**
  * Where a US Advanced control operator may put a data emission, ITU Region 2.
  *
- * 47 CFR 97.301(c) is the Advanced allocation. 97.305 is where RTTY and data
- * are authorized inside it. The two are intersected here. Phone-only stretches
- * are not data: 3.700–4.000 MHz and 14.150–14.350 MHz are absent on purpose.
- * 6 m, 2 m, 1.25 m and 70 cm follow 97.301(a), which every class shares and
- * where data is allowed across the amateur band.
+ * The segments are [FccPart97]'s Advanced data table, which is 97.301(c)
+ * intersected with 97.305. Phone-only stretches are not data. 60 m is the
+ * five 2.8 kHz channels, not a continuous span from 5.3515 to 5.3665 MHz.
+ * The live gate the screens call is [FccPart97.gate], which follows the
+ * class Setup has stored. This object stays so a test can still ask the
+ * Advanced data question on its own.
  *
  * The whole signal has to sit inside one segment. A carrier that starts inside
  * and a tone that ends outside is refused. JS8's dial plus its audio offset is
  * the low edge, and the tone width is added for the high edge.
  */
 object UsAdvanced {
-    val dataHz: List<LongRange> = listOf(
-        1_800_000L..2_000_000L,
-        3_525_000L..3_600_000L,
-        5_351_500L..5_366_500L,
-        7_025_000L..7_125_000L,
-        10_100_000L..10_150_000L,
-        14_025_000L..14_150_000L,
-        18_068_000L..18_110_000L,
-        21_025_000L..21_200_000L,
-        24_890_000L..24_930_000L,
-        28_000_000L..28_300_000L,
-        50_000_000L..54_000_000L,
-        144_000_000L..148_000_000L,
-        222_000_000L..225_000_000L,
-        420_000_000L..450_000_000L,
-    )
+    val dataHz: List<LongRange>
+        get() = FccPart97.segments(LicenseClass.ADVANCED, Emission.DATA)
 
-    /** True when [lowHz] and [highHz] are inside the same data segment, both edges included. */
-    fun dataCovers(lowHz: Long, highHz: Long): Boolean {
-        if (highHz < lowHz) return false
-        return dataHz.any { band -> lowHz in band && highHz in band }
-    }
+    /** True when [lowHz] and [highHz] are inside the same Advanced data segment, both edges included. */
+    fun dataCovers(lowHz: Long, highHz: Long): Boolean =
+        FccPart97.covers(LicenseClass.ADVANCED, Emission.DATA, lowHz, highHz)
 
     /**
      * Why a data transmission must not be sent, or null when the dial, the
