@@ -659,3 +659,31 @@ Credit: KD0CQ. Clarification after 818e523: FT8, FT4 and the other non-JS8 modes
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **241 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.
+
+## JS8 edges, and the header clock and battery
+
+Credit: KD0CQ. Two leftovers on top of 323ca78, from an S24.
+
+**What I found**
+
+1. The JS8 command row scrolls sideways. The last key was one line, `Show: GhostNet`. After the swipe that brings it to the right edge, the last letters were clipped. The offset row's text field has Material's 280 dp minimum. In the landscape column that minimum, and the field sitting flush to the edge, left `Set` slightly past the clip on the first landscape frame.
+
+2. The GhostNet net reminder is the footer of that same control block. The block ended on the system navigation bar, and the last line was shaved by it.
+
+3. The header clock was the literal `--:--:--`. The battery printed `bat` even when the value was -1, so the face read "-1%". I read `pstate_line` in Guru-RF/OpenX6X00 `src/remote_server.c` (main, `b09df068`) and `radio_get_battery` in `src/radio.h`, and the TCI command list in `src/tci_server.c`. The state line does carry battery: `"bat":%d`. `radio_get_battery` is the percent on the radio's screen, and -1 on external power or before the base has measured the pack. The state line has no time field. TCI has no time command and no battery command. `clk? MS` is answered `clk MS <radio unix ms>`, and that answer is step 1 of setting the radio's clock from the phone (`clock_from_phone`). It is not a status field the face is pushed, so the header does not poll it.
+
+**What changed**
+
+- The Show key is two lines, `Show` over the name (`GhostNet`, `All`, `No HB`, `Directed`). The command row's end padding is inside the horizontal scroll, so the last key can travel clear of the right edge.
+- The offset field's minimum width is 0. `Set` keeps its own width. The JS8 window applies the navigation-bar inset, and the control block keeps 12 dp under the scroll and 8 dp at the end, so the net reminder and `Set` end above the bar and inside the column.
+- A `bat` in 0..100 is shown, in portrait and in the landscape header. -1 is not shown. Nothing connected still shows an em dash, so a blank header is not read as external power. A low-battery alert still ignores -1. The header clock is the phone's UTC, `HH:mm:ssZ`, ticking once a second. The "~ —" remaining-time mark stays the pending placeholder: the state line does not carry a time-remaining field.
+
+**What is still not the radio's clock**
+
+The face clock is the phone, in UTC. It is not the radio's RTC, and it does not send `clk`. The radio's own clock is still not a field on the panel state line or on TCI.
+
+`theHeaderClockIsPhoneUtcAndAMissingBatteryIsHidden`, the `bat: -1` parse, `lowBattery(-1)`, and `showButton` cover the sentinel, the UTC digits, and the two-line Show key.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug` after this: **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.

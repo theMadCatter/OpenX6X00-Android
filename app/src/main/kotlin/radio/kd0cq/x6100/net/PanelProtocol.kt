@@ -206,6 +206,12 @@ data class RadioState(
     /** Which VFO the screen is on; "set vfo" toggles it. */
     val vfo: Int,
     val atuOn: Boolean,
+    /**
+     * `bat`, from `radio_get_battery`. A percent in 0..100 is the figure on
+     * the radio. -1 is external power, or the base has not measured the pack
+     * yet. The face hides that sentinel. It is kept here so a later line can
+     * still tell "no reading" from "the key was absent" (the parser's 0).
+     */
     val battery: Int,
     val transmitting: Boolean,
     val freqLocked: Boolean,

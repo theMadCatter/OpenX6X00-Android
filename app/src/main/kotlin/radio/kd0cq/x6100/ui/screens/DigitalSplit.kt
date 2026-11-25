@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -68,7 +69,12 @@ fun DigitalSplit(
     /** Share of a wide window given to the picture. The list gets the rest. */
     pictureShare: Float = 0.42f,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // navigationBarsPadding is the system bar, on every side. The JS8 route's
+    // host often consumed that inset already, and this one is then zero. The
+    // control block still keeps 12 dp under its scroll and 8 dp at its end,
+    // because the GhostNet reminder was the line the bar shaved, and Set was
+    // the control the first landscape frame shaved on the right.
+    BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
         val wide = RadioFace.wideWindow(maxWidth.value, maxHeight.value)
         if (wide) {
             Column(Modifier.fillMaxSize().padding(8.dp)) {
@@ -79,11 +85,7 @@ fun DigitalSplit(
                     }
                     Column(Modifier.weight(1f - pictureShare).fillMaxHeight().padding(start = 8.dp)) {
                         list(Modifier.weight(1f).fillMaxWidth())
-                        Column(
-                            Modifier
-                                .heightIn(max = 168.dp)
-                                .verticalScroll(rememberScrollState()),
-                        ) { controls() }
+                        Column(controlBlock(168.dp)) { controls() }
                     }
                 }
             }
@@ -107,15 +109,25 @@ fun DigitalSplit(
                     ) { picture() }
                     list(Modifier.weight(1f).fillMaxWidth())
                 }
-                Column(
-                    Modifier
-                        .heightIn(max = 220.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) { controls() }
+                Column(controlBlock(220.dp)) { controls() }
             }
         }
     }
 }
+
+/**
+ * The control block under the list. The height cap is the phone's. The
+ * scroll is inside that cap. The bar inset, then 12 dp, sits outside the
+ * scroll, so the last line ends above the system navigation bar. The end
+ * pad keeps the last control off the right edge.
+ */
+@Composable
+private fun controlBlock(maxHeight: androidx.compose.ui.unit.Dp): Modifier =
+    Modifier
+        .navigationBarsPadding()
+        .padding(bottom = 12.dp, end = 8.dp)
+        .heightIn(max = maxHeight)
+        .verticalScroll(rememberScrollState())
 
 /** A call drawn on the lane over the waterfall, at its audio offset. */
 data class LaneMark(val hz: Int, val label: String, val color: Color)

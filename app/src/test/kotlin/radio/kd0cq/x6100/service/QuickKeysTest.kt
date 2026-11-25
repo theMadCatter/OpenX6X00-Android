@@ -29,6 +29,7 @@ class QuickKeysTest {
         assertTrue(RadioAlerts.lowBattery(15, 20))
         assertFalse(RadioAlerts.lowBattery(21, 20))
         assertFalse(RadioAlerts.lowBattery(null, 20))
+        assertFalse(RadioAlerts.lowBattery(-1, 20))
         assertTrue(RadioAlerts.highSwr(2.5, RadioAlerts.DEFAULT_SWR, transmitting = true))
         assertFalse(RadioAlerts.highSwr(2.4, RadioAlerts.DEFAULT_SWR, transmitting = true))
         assertFalse(RadioAlerts.highSwr(9.0, RadioAlerts.DEFAULT_SWR, transmitting = false))

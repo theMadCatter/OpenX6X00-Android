@@ -110,6 +110,9 @@ class DigitalTest {
         assertTrue(GhostNet.REMINDER.contains("7.107 MHz"))
         assertTrue(GhostNet.REMINDER.contains("Wednesday 7 PM Central"))
         assertTrue(GhostNet.SETTINGS_NOTE.contains("web config"))
+        assertEquals("Show\nGhostNet", Js8Look.showButton(Js8Look.Show.GHOSTNET))
+        assertEquals("Show\nAll", Js8Look.showButton(Js8Look.Show.ALL))
+        assertFalse(Js8Look.showButton(Js8Look.Show.GHOSTNET).contains("Show:"))
     }
 
     @Test
