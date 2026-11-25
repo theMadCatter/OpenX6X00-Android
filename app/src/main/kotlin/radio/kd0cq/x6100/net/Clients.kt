@@ -56,6 +56,21 @@ interface PanelClient : Closeable {
     val frames: kotlinx.coroutines.flow.Flow<PanelEvent>
         get() = kotlinx.coroutines.flow.emptyFlow()
 
+    /**
+     * The JS8 and FT8 app waterfall, also conflated to the latest. It is not on [frames]:
+     * those two pictures would replace each other, and a spectrum flood would hide every
+     * JS8 line. It is not on [events] either, so a row of bins cannot sit in front of `ctl`.
+     */
+    val appFrames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
+     * WeFax scan lines. Not on [frames] and not on [events]: a chart is a
+     * stream of rows, and one of them must not sit in front of `ctl`.
+     */
+    val faxFrames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
     /** The link's phase, and the last word about why it is not up. */
     val phase: kotlinx.coroutines.flow.StateFlow<LinkPhase>
     val lastError: kotlinx.coroutines.flow.StateFlow<String?>
