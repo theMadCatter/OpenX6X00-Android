@@ -9,9 +9,12 @@
 // control, and in landscape the waterfall beside the list. That is
 // js8_window.c adapted to a phone. The FT8 window is a different picture.
 //
-// On the radio the lane of calls is a solid strip at the top. Under it the
-// waterfall fills the dialog, on the main waterfall palette, from the noise
-// floor to 30 dB over it. The TX marker is a half-opaque band as wide as
+// On the radio the lane of calls is a solid strip at the top. Two calls that
+// share an edge used to paint on the same baseline. A wide window gives them
+// a second row; a portrait strip stays one row and drops the later call.
+// Under the strip the waterfall fills the dialog, one pixel per line, on the
+// main waterfall palette, from the noise floor to 30 dB over it. The TX
+// marker is a half-opaque band as wide as
 // the mode (50 Hz FT8, 83 Hz FT4, 167 Hz FT2), not a hairline. The message
 // list is see-through and lies on the lower part of that waterfall, leaving
 // 40 px clear so a gap in the band can be seen. Turning the main knob fades
@@ -30,7 +33,6 @@
 package radio.kd0cq.x6100.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -44,6 +46,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -69,13 +72,16 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import radio.kd0cq.x6100.digital.AppWaterfallPaint
 import radio.kd0cq.x6100.digital.Ft8Heard
 import radio.kd0cq.x6100.digital.Ft8Key
 import radio.kd0cq.x6100.digital.Ft8Line
@@ -87,8 +93,11 @@ import radio.kd0cq.x6100.digital.ft8Heard
 import radio.kd0cq.x6100.digital.ft8KeySends
 import radio.kd0cq.x6100.digital.ft8Lines
 import radio.kd0cq.x6100.digital.ft8Page
+import radio.kd0cq.x6100.digital.laneEdge
+import radio.kd0cq.x6100.digital.laneRows
 import radio.kd0cq.x6100.digital.waterfallX
 import radio.kd0cq.x6100.net.Ft8Row
+import radio.kd0cq.x6100.ui.LocalWideWindow
 import radio.kd0cq.x6100.net.PanelCommands
 import radio.kd0cq.x6100.ui.RadioViewModel
 import radio.kd0cq.x6100.ui.face.WaterfallDisplay
@@ -408,25 +417,32 @@ private fun Ft8Lane(
     highHz: Int?,
     selectedCall: String,
 ) {
+    // Before, every label was placed at y = 0. Two stations a few hertz apart
+    // painted on the same baseline, and on the wide landscape strip that read
+    // as one blob at the top of the window. A wide window now has two rows.
+    // Portrait stays the radio's one strip and drops the later label. TX is
+    // listed first, so it keeps the top row when a call sits on it.
+    val wide = LocalWideWindow.current
+    val rows = if (wide) 2 else 1
+    val laneHeight = if (wide) 40.dp else Ft8Look.LANE_PX.dp
+    val rowHeight = laneHeight / rows
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .height(Ft8Look.LANE_PX.dp)
+            .height(laneHeight)
+            .clipToBounds()
             .background(Color(Ft8Look.PANEL)),
     ) {
         val low = lowHz ?: 0
         val high = highHz ?: 0
+        val density = LocalDensity.current
+        val widthPx = with(density) { maxWidth.toPx() }
+        val measurer = rememberTextMeasurer()
+        val style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        val items = ArrayList<LaneLabel>()
         if (txHz != null && high > low) {
             val x = waterfallX(txHz, low, high, 1f)
-            if (x != null) {
-                Text(
-                    "TX",
-                    color = Color(Ft8Look.WARN),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    modifier = Modifier.placeAt(x),
-                )
-            }
+            if (x != null) items += LaneLabel("TX", x, Color(Ft8Look.WARN))
         }
         heard.forEach { station ->
             val x = if (high > low) waterfallX(station.freqHz, low, high, 1f) else null
@@ -436,26 +452,37 @@ private fun Ft8Lane(
                 cq = station.cellType == Ft8Look.CELL_CQ,
                 selected = station.call.equals(selectedCall, ignoreCase = true),
             )
+            items += LaneLabel(station.call, x, Color(ink))
+        }
+        val left = FloatArray(items.size)
+        val right = FloatArray(items.size)
+        items.forEachIndexed { index, item ->
+            val measured = measurer.measure(item.text, style, maxLines = 1).size.width.toFloat()
+            val edge = laneEdge(item.fraction, measured, widthPx)
+            left[index] = edge.first
+            right[index] = edge.second
+        }
+        val assigned = laneRows(left, right, rows)
+        items.forEachIndexed { index, item ->
+            val row = assigned[index]
+            if (row < 0) return@forEachIndexed
             Text(
-                station.call,
-                color = Color(ink),
+                item.text,
+                color = item.color,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 maxLines = 1,
-                modifier = Modifier.placeAt(x),
+                softWrap = false,
+                modifier = Modifier.offset(
+                    x = with(density) { left[index].toDp() },
+                    y = rowHeight * row,
+                ),
             )
         }
     }
 }
 
-/** Fraction across the lane, kept on the strip so a call at the right edge is still readable. */
-private fun Modifier.placeAt(fraction: Float): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    val x = ((constraints.maxWidth - placeable.width) * fraction).toInt().coerceAtLeast(0)
-    layout(constraints.maxWidth, constraints.maxHeight) {
-        placeable.place(x, 0)
-    }
-}
+private data class LaneLabel(val text: String, val fraction: Float, val color: Color)
 
 @Composable
 private fun Ft8Waterfall(
@@ -476,23 +503,15 @@ private fun Ft8Waterfall(
                 modifier = Modifier.padding(8.dp),
             )
         } else {
-            Canvas(Modifier.fillMaxSize()) {
-                val shown = frames.takeLast(size.height.toInt().coerceAtLeast(1))
-                if (shown.isEmpty()) return@Canvas
-                val rowH = size.height / shown.size
-                shown.forEachIndexed { index, frame ->
-                    val bins = frame.bins.coerceAtLeast(1)
-                    val binW = size.width / bins
-                    for (bin in frame.db.indices) {
-                        val db = frame.db[bin].toInt().coerceIn(0, 30)
-                        drawRect(
-                            color = Color(gauss[db * 255 / 30]),
-                            topLeft = androidx.compose.ui.geometry.Offset(bin * binW, index * rowH),
-                            size = androidx.compose.ui.geometry.Size(binW + 1f, rowH + 1f),
-                        )
-                    }
-                }
-                val low = latest?.lowHz ?: return@Canvas
+            // One pixel per line, newest at the top. The Gauss index is the
+            // same 0..30 dB window the stretched rects used. The bitmap is
+            // density-none, so a stored pixel stays one screen pixel.
+            AppWaterfallBitmap(
+                frames = frames,
+                colorOf = { db -> gauss[AppWaterfallPaint.gaussLevel(db).coerceIn(0, gauss.lastIndex)] },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val low = latest?.lowHz ?: return@AppWaterfallBitmap
                 val high = latest.highHz
                 val band = if (txHz != null) finderBand(txHz, widthHz, low, high, size.width) else null
                 if (band != null) {

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import radio.kd0cq.x6100.core.PairingController
+import radio.kd0cq.x6100.digital.AppWaterfallPaint
 import radio.kd0cq.x6100.digital.Js8Protocol
 import radio.kd0cq.x6100.digital.Js8Row
 import radio.kd0cq.x6100.digital.Js8Status
@@ -410,12 +411,19 @@ class RadioLink(
         }
     }
 
-    /** The JS8 waterfall's own lane. A spectrum frame never replaces one of these. */
+    /**
+     * The JS8 and FT8 waterfall. A spectrum frame never replaces one of these.
+     *
+     * The list stays oldest-first. The painter puts the last frame on the top
+     * pixel and walks older frames down, one pixel each. [AppWaterfallPaint.KEPT]
+     * is long enough for that to fill a phone pane. 96 lines was the old cap,
+     * and the painter stretched those 96 across the whole pane.
+     */
     private fun collectAppFrames() {
         scope.launch {
             panel.appFrames.collect { event ->
                 if (event is PanelEvent.AppWaterfall) {
-                    _appWaterfall.value = (_appWaterfall.value + event.frame).takeLast(APP_WF_ROWS)
+                    _appWaterfall.value = (_appWaterfall.value + event.frame).takeLast(AppWaterfallPaint.KEPT)
                 }
             }
         }
@@ -475,7 +483,6 @@ class RadioLink(
     private companion object {
         const val FT8_ROWS_KEPT = 48
         const val JS8_ROWS_KEPT = Js8Protocol.ROWS_KEPT
-        const val APP_WF_ROWS = 96
         const val CW_LINES_KEPT = 64
         const val RECEIPTS_KEPT = 20
     }
