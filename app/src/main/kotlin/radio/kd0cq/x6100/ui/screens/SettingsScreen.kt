@@ -35,6 +35,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import android.content.Intent
 import android.provider.Settings
+import radio.kd0cq.x6100.digital.FccPart97
+import radio.kd0cq.x6100.digital.LicenseClass
 import radio.kd0cq.x6100.net.LinkPhase
 import radio.kd0cq.x6100.service.BackgroundPreference
 import radio.kd0cq.x6100.ui.RadioViewModel
@@ -63,6 +65,7 @@ fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
 
         Text("Link", style = MaterialTheme.typography.titleMedium)
         BackgroundSwitch()
+        LicenseSection(viewModel)
         StationToggles(viewModel)
         FieldOptions()
         AlertOptions()
@@ -150,7 +153,7 @@ private fun BackgroundSwitch() {
             Text("Run in background", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
             Text(
                 "Keep the radio link and the receiver playing when the screen is off. " +
-                    "An on-screen PTT is let go. Transmitting stays on the key you are holding.",
+                    "PTT and Tune are let go, and FT8 and JS8 are told to stop.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -174,6 +177,69 @@ private fun BackgroundSwitch() {
  * remote_server.c has no `pos` and no `clk`, and answers `err unknown command`.
  * A granted location still fills the header grid from the phone.
  */
+/**
+ * Country and license class for the band-edge check.
+ *
+ * Before this, every digital transmission was checked as US Advanced data and
+ * nothing else was checked at all. The default is no class and the check on,
+ * so the radio cannot be keyed until a class is chosen. Turning the check off
+ * is for an operator outside the United States. It does not remove Take
+ * control, the transmit flag, or the unkey.
+ */
+@Composable
+private fun LicenseSection(viewModel: RadioViewModel) {
+    val choice by viewModel.license.collectAsState()
+    Text("Transmitting", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+    Text(
+        "Country: United States. This table is 47 CFR 97.301 and 97.305. " +
+            "No class is selected until you pick one, and transmitting stays blocked until then.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ClassButton("Not chosen", choice.license == null) { viewModel.chooseLicense(null) }
+    }
+    LicenseClass.entries.chunked(2).forEach { pair ->
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            pair.forEach { license ->
+                ClassButton(license.label, choice.license == license) { viewModel.chooseLicense(license) }
+            }
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Check US band edges", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "Off is for an operator outside the United States. Read the warning before you turn it off.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(checked = choice.check, onCheckedChange = viewModel::setBandCheck)
+    }
+    if (!choice.check) {
+        Text(FccPart97.CHECK_OFF_WARNING, color = RfGuru.red, style = MaterialTheme.typography.bodySmall)
+    }
+    Text(
+        "FT8 and JS8 transmissions are limited to ${FccPart97.DIGITAL_TX_CAP_WATTS.toInt()} W by the radio. " +
+            "30 m is ${FccPart97.THIRTY_METER_PEP_WATTS} W PEP and 60 m is ${FccPart97.SIXTY_METER_ERP_WATTS} W ERP. " +
+            "This radio is below the PEP figure, and ERP depends on the antenna, so those two are not a power command.",
+        style = MaterialTheme.typography.bodySmall,
+        color = RfGuru.dim,
+    )
+}
+
+@Composable
+private fun ClassButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = onClick) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick) { Text(label) }
+    }
+}
+
 @Composable
 private fun StationToggles(viewModel: RadioViewModel) {
     val context = LocalContext.current

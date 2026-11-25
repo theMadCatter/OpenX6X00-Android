@@ -1624,6 +1624,10 @@ fun HoldToTalk(
     onPress: () -> Unit,
     onRelease: () -> Unit,
     modifier: Modifier = Modifier,
+    idle: String = "PTT",
+    live: String = "ON AIR",
+    description: String = "Push to talk",
+    labelSize: androidx.compose.ui.unit.TextUnit = 18.sp,
 ) {
     Surface(
         color = if (keyed) RfGuru.tx else RfGuru.button,
@@ -1642,10 +1646,10 @@ fun HoldToTalk(
                     }
                 })
             }
-            .semantics { contentDescription = if (keyed) "On air, release to unkey" else "Push to talk" },
+            .semantics { contentDescription = if (keyed) "On air, release to unkey" else description },
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(if (keyed) "ON AIR" else "PTT", fontSize = 18.sp, fontFamily = Mono, fontWeight = FontWeight.Bold)
+            Text(if (keyed) live else idle, fontSize = labelSize, fontFamily = Mono, fontWeight = FontWeight.Bold)
         }
     }
 }

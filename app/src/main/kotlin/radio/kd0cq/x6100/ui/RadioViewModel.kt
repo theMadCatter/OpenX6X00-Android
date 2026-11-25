@@ -21,12 +21,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import radio.kd0cq.x6100.discovery.FoundRadio
 import radio.kd0cq.x6100.discovery.RadioDiscovery
+import radio.kd0cq.x6100.digital.BandChoice
+import radio.kd0cq.x6100.digital.Emission
+import radio.kd0cq.x6100.digital.FccPart97
 import radio.kd0cq.x6100.digital.Ft8Look
 import radio.kd0cq.x6100.digital.GhostNet
 import radio.kd0cq.x6100.digital.Js8Protocol
 import radio.kd0cq.x6100.digital.Js8Row
 import radio.kd0cq.x6100.digital.Js8Status
-import radio.kd0cq.x6100.digital.UsAdvanced
+import radio.kd0cq.x6100.digital.LicenseClass
 import radio.kd0cq.x6100.digital.WeFaxProtocol
 import radio.kd0cq.x6100.digital.WeFaxScan
 import radio.kd0cq.x6100.digital.WeFaxStatus
@@ -60,9 +63,11 @@ import radio.kd0cq.x6100.log.QsoDatabase
 import radio.kd0cq.x6100.log.StationPlace
 import radio.kd0cq.x6100.log.toEntity
 import radio.kd0cq.x6100.log.toQso
+import radio.kd0cq.x6100.service.LicensePreference
 import radio.kd0cq.x6100.service.RadioConnectionService
 import radio.kd0cq.x6100.service.RememberedHost
 import radio.kd0cq.x6100.service.RememberedHostStore
+import radio.kd0cq.x6100.ui.face.RadioFace
 import radio.kd0cq.x6100.ui.face.RidgeHold
 import radio.kd0cq.x6100.ui.face.WaterfallHold
 import radio.kd0cq.x6100.service.RadioRigs
@@ -80,6 +85,20 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     private val rig = RadioRigs.rig(application)
     private val discovery = RadioDiscovery(application)
     private val remembered = RememberedHostStore(application)
+    private val licensePrefs = LicensePreference(application)
+
+    private val _license = MutableStateFlow(licensePrefs.read())
+
+    /**
+     * The band check. It starts as "check on, no class", which blocks every
+     * transmission until Setup is told a class or the check is turned off.
+     */
+    val license: StateFlow<BandChoice> = _license.asStateFlow()
+
+    private val _powerNote = MutableStateFlow<String?>(null)
+
+    /** Why a power change was refused, or the 7 W digital-cap reminder. */
+    val powerNote: StateFlow<String?> = _powerNote.asStateFlow()
 
     val foundRadios: StateFlow<List<FoundRadio>> = discovery.radios
 
@@ -188,6 +207,9 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     /** Whether we hold the key, from either path. */
     val pttKeyed: StateFlow<Boolean> = rig.ptt.keyed
 
+    /** The external-tuner lease. Separate from [pttKeyed]. */
+    val tuneKeyed: StateFlow<Boolean> = rig.ptt.tuning
+
     /** Why we are not on the air, in the radio's words or ours. */
     val pttRefusal: StateFlow<String?> = rig.ptt.refusal
 
@@ -218,8 +240,92 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-    /** Press the key. It may refuse, and [pttRefusal] says why; nothing is sent on a guess. */
-    fun pressPtt() = rig.ptt.press()
+    /**
+     * Press the key. Take control, the transmit flag and the band check are
+     * asked here, before either `key PTT 1 HOLD` or `trx:0,true,tci;`. The
+     * hold is the question: there is no dialog in front of a hold-to-talk key.
+     * A refusal sends nothing.
+     */
+    fun pressPtt() {
+        val why = voiceKeyRefusal()
+        if (why != null) {
+            rig.ptt.report(why)
+            return
+        }
+        rig.ptt.press()
+    }
+
+    /**
+     * Hold Tune. Same gates as [pressPtt], for a carrier at the dial in the
+     * current mode's emission. The command is `tune 1 HOLD`, not `set atu`.
+     */
+    fun pressTune() {
+        val why = tuneRefusal()
+        if (why != null) {
+            rig.ptt.report(why)
+            return
+        }
+        rig.ptt.pressTune()
+    }
+
+    fun releaseTune() = rig.ptt.releaseTune()
+
+    /** The class Setup stored. Null is "not chosen", which blocks transmitting while the check is on. */
+    fun chooseLicense(license: LicenseClass?) {
+        val next = _license.value.copy(license = license)
+        licensePrefs.write(next)
+        _license.value = next
+    }
+
+    /** The off switch. The warning is shown by Setup. The other gates stay. */
+    fun setBandCheck(on: Boolean) {
+        val next = _license.value.copy(check = on)
+        licensePrefs.write(next)
+        _license.value = next
+    }
+
+    /**
+     * Why voice PTT must not key, or null when the press may go out.
+     * The span is the filter, on the side the mode transmits, so a signal
+     * that starts inside a segment and ends outside it is refused.
+     */
+    fun voiceKeyRefusal(): String? {
+        val radio = state.value
+        val emission = radio?.let { FccPart97.emissionOf(it.mode) }
+        val span = radio?.let { voiceSpan(it) }
+        return FccPart97.gate(
+            enabling = true,
+            choice = _license.value,
+            holdingControls = holdingControls(),
+            txAllowed = role.value.txAllowed,
+            emission = emission ?: Emission.PHONE,
+            lowHz = span?.first,
+            highHz = span?.second,
+            missing = "The radio has not reported a dial frequency yet.",
+            modeKnown = radio == null || emission != null,
+        )
+    }
+
+    /**
+     * Why Tune must not key. Tune is a carrier at the dial, not the whole
+     * receive filter, so the check is that one frequency in the mode's emission.
+     */
+    fun tuneRefusal(): String? {
+        val radio = state.value
+        val emission = radio?.let { FccPart97.emissionOf(it.mode) }
+        val dial = radio?.freqHz?.toLong()
+        return FccPart97.gate(
+            enabling = true,
+            choice = _license.value,
+            holdingControls = holdingControls(),
+            txAllowed = role.value.txAllowed,
+            emission = emission ?: Emission.PHONE,
+            lowHz = dial,
+            highHz = dial,
+            missing = "The radio has not reported a dial frequency yet.",
+            modeKnown = radio == null || emission != null,
+        )
+    }
 
     /** Let go. Safe from anywhere, including a screen that is going away. */
     fun releasePtt() = rig.ptt.release()
@@ -292,8 +398,33 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setVolume(value: Int) = send(PanelCommands.set(PanelSettings.VOL, value))
 
-    /** The radio takes tenths of a watt. */
-    fun setPower(tenthsOfWatt: Int) = send(PanelCommands.set(PanelSettings.PWR, tenthsOfWatt))
+    /**
+     * The radio takes tenths of a watt on `set pwr`.
+     *
+     * Before this, any operate session could send it, including one that did
+     * not hold control and one the admin had refused TX to. The firmware
+     * refuses `set` without operate and control. This also requires the
+     * transmit flag, because power is a transmit control. It does not key,
+     * so there is no dialog and no band check. Above 7.0 W the line is still
+     * sent: FT8 and JS8 clamp themselves, and voice may use the rest.
+     * Returns the refusal, the cap reminder, or null.
+     */
+    fun setPower(tenthsOfWatt: Int): String? {
+        if (!holdingControls()) {
+            val why = "Take control before changing power."
+            _powerNote.value = why
+            return why
+        }
+        if (!role.value.txAllowed) {
+            val why = FccPart97.NO_TX
+            _powerNote.value = why
+            return why
+        }
+        send(PanelCommands.set(PanelSettings.PWR, tenthsOfWatt))
+        val note = if (tenthsOfWatt > FccPart97.DIGITAL_CAP_TENTHS) FccPart97.DIGITAL_CAP_NOTE else null
+        _powerNote.value = note
+        return note
+    }
 
     fun setZoom(value: Int) = send(PanelCommands.set(PanelSettings.ZOOM, value))
 
@@ -375,8 +506,23 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     fun ft8Operate(line: String): Boolean {
         if (!ft8LineIsOperate(line)) return false
         if (!holdingControls()) return false
+        if (ft8Word(line) == "txfreq" && !txOffsetAllowed(ft8OffsetHz(line), ft8Width())) return false
         send(line)
         return true
+    }
+
+    /**
+     * Move the FT8 transmit offset. Not a transmission, so there is no dialog.
+     * The band check is the offset being asked for, not the one already set,
+     * so an illegal offset can be moved back inside a segment. Returns the
+     * reason nothing was sent, or null when `ft8 txfreq` went out.
+     */
+    fun moveFt8Offset(hz: Int): String? {
+        val next = hz.coerceAtLeast(0)
+        val why = offsetRefusal(next, ft8Width(), "FT8 transmit offset")
+        if (why != null) return why
+        send(PanelCommands.ft8("txfreq", next.toString()))
+        return null
     }
 
     /**
@@ -388,12 +534,7 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun ft8Transmit(line: String, enabling: Boolean): String? {
         if (!ft8LineIsTransmit(line)) return "That is not an FT8 transmit."
-        if (!enabling) {
-            if (!holdingControls()) return "Take control before this."
-            send(line)
-            return null
-        }
-        val reason = ft8TransmitReason()
+        val reason = ft8TransmitReason(enabling)
         if (reason != null) return reason
         send(line)
         return null
@@ -422,8 +563,10 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Open, close, auto, cont, save, clear, plan, or unplan. None of these is
-     * a transmit command in the panel set. Each still needs operate and control,
-     * because the radio refuses them otherwise. Returns false when nothing was sent.
+     * a transmit command. The panel set has no WeFax TX word: the radio can
+     * transmit a fax from its own screen, and this app cannot start one.
+     * Each of these words still needs operate and control, because the radio
+     * refuses them otherwise. Returns false when nothing was sent.
      */
     fun wefaxOperate(word: String): Boolean {
         if (word !in WeFaxProtocol.words) return false
@@ -441,25 +584,40 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
     fun js8Operate(line: String): Boolean {
         if (!js8LineIsOperate(line)) return false
         if (!holdingControls()) return false
+        if (js8Word(line) == "txfreq" && !txOffsetAllowed(js8OffsetHz(line), js8Width())) return false
         send(line)
         return true
+    }
+
+    /**
+     * Move the JS8 transmit offset. Same rule as [moveFt8Offset]: the new
+     * offset is what is checked, and no dialog is raised because this line
+     * does not key.
+     */
+    fun moveJs8Offset(hz: Int): String? {
+        val next = hz.coerceAtLeast(0)
+        val why = offsetRefusal(next, js8Width(), "JS8 transmit offset")
+        if (why != null) return why
+        send(Js8Protocol.txFreq(next))
+        return null
     }
 
     /**
      * Why a transmit would not be sent, or null when it would.
      * The confirm dialog asks this before it is shown, and [js8Transmit] asks again.
      */
-    fun js8TransmitBlocked(): String? = js8TransmitReason()
+    fun js8TransmitBlocked(): String? = js8TransmitReason(enabling = true)
 
     /**
      * Send, CQ, auto CQ, heartbeat, heartbeat-now, or auto.
      * Returns the reason nothing was sent, or null when the line went out.
-     * The caller has already required a tap, and for Send and CQ a second tap.
-     * This does not turn auto or heartbeat on by itself.
+     * [enabling] is false when the same word is turning a transmission off.
+     * The caller asks before a word that would start one, including heartbeat
+     * and auto. Turning one off does not ask and does not need a legal offset.
      */
-    fun js8Transmit(line: String): String? {
+    fun js8Transmit(line: String, enabling: Boolean = true): String? {
         if (!js8LineIsTransmit(line)) return "That is not a JS8 transmit."
-        val reason = js8TransmitReason()
+        val reason = js8TransmitReason(enabling)
         if (reason != null) return reason
         send(line)
         return null
@@ -467,28 +625,74 @@ class RadioViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun holdingControls(): Boolean = control.value.mine && role.value.canOperate
 
-    private fun js8TransmitReason(): String? {
+    private fun js8TransmitReason(enabling: Boolean): String? {
         val js8 = js8Status.value
-        return UsAdvanced.refuseTransmit(
+        val offset = js8?.txFreqHz
+        return dataGate(enabling, offset, js8Width(), "The radio has not reported the JS8 transmit offset yet.")
+    }
+
+    private fun ft8TransmitReason(enabling: Boolean = true): String? {
+        val ft8 = ft8Status.value
+        return dataGate(enabling, ft8?.txFreqHz, ft8Width(), "The radio has not reported the FT8 transmit offset yet.")
+    }
+
+    private fun js8Width(): Int = Js8Protocol.toneWidthHz(js8Status.value?.speed ?: 0)
+
+    private fun ft8Width(): Int = Ft8Look.toneWidthHz(ft8Status.value?.protocol ?: 1)
+
+    /**
+     * A data signal at the dial plus [offsetHz], [widthHz] wide.
+     * Shared by FT8, FT4, FT2 and JS8. The mode knob is not consulted:
+     * those engines transmit data either way.
+     */
+    private fun dataGate(enabling: Boolean, offsetHz: Int?, widthHz: Int, missingOffset: String): String? {
+        val dial = state.value?.freqHz?.toLong()
+        val low = if (dial != null && offsetHz != null) dial + offsetHz else null
+        val high = if (low != null) low + widthHz else null
+        val missing = if (dial == null) "The radio has not reported a dial frequency yet." else missingOffset
+        return FccPart97.gate(
+            enabling = enabling,
+            choice = _license.value,
             holdingControls = holdingControls(),
             txAllowed = role.value.txAllowed,
-            dialHz = state.value?.freqHz?.toLong(),
-            offsetHz = js8?.txFreqHz,
-            widthHz = Js8Protocol.toneWidthHz(js8?.speed ?: 0),
-            offsetName = "JS8 transmit offset",
+            emission = Emission.DATA,
+            lowHz = low,
+            highHz = high,
+            missing = missing,
         )
     }
 
-    private fun ft8TransmitReason(): String? {
-        val ft8 = ft8Status.value
-        return UsAdvanced.refuseTransmit(
-            holdingControls = holdingControls(),
-            txAllowed = role.value.txAllowed,
-            dialHz = state.value?.freqHz?.toLong(),
-            offsetHz = ft8?.txFreqHz,
-            widthHz = Ft8Look.toneWidthHz(ft8?.protocol ?: 1),
-            offsetName = "FT8 transmit offset",
+    /** The offset a txfreq line names, or null when it does not name one. */
+    private fun ft8OffsetHz(line: String): Int? =
+        line.trim().removePrefix("ft8 txfreq").trim().toIntOrNull()
+
+    private fun js8OffsetHz(line: String): Int? =
+        line.trim().removePrefix("js8 txfreq").trim().toIntOrNull()
+
+    /**
+     * Whether `txfreq` may be sent. False when the gate refuses. Used by the
+     * operate backstop so a line that skipped [moveFt8Offset] or [moveJs8Offset]
+     * still cannot aim the transmitter outside the table.
+     */
+    private fun txOffsetAllowed(offsetHz: Int?, widthHz: Int): Boolean {
+        if (offsetHz == null) return false
+        return offsetRefusal(offsetHz.coerceAtLeast(0), widthHz, "transmit offset") == null
+    }
+
+    private fun offsetRefusal(offsetHz: Int, widthHz: Int, offsetName: String): String? =
+        dataGate(enabling = true, offsetHz = offsetHz, widthHz = widthHz, missingOffset = "The radio has not reported the $offsetName yet.")
+
+    /** The filter, placed on the side the mode transmits. Both edges are absolute Hz. */
+    private fun voiceSpan(radio: RadioState): Pair<Long, Long> {
+        val (low, high) = RadioFace.passbandHz(
+            freqHz = radio.freqHz,
+            lowHz = radio.filterLowHz,
+            highHz = radio.filterHighHz,
+            mode = radio.mode,
+            keyToneHz = radio.keyToneHz,
+            cwToneRises = radio.cwToneRises,
         )
+        return low.toLong() to high.toLong()
     }
 
     private fun ft8Word(line: String): String = line.trim().removePrefix("ft8 ").substringBefore(' ')

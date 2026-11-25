@@ -75,7 +75,7 @@ import radio.kd0cq.x6100.digital.Js8Row
 import radio.kd0cq.x6100.ui.RadioViewModel
 import radio.kd0cq.x6100.ui.theme.RfGuru
 
-private data class Js8Confirm(val title: String, val detail: String, val line: String)
+private data class Js8Confirm(val title: String, val detail: String, val line: String, val enabling: Boolean = true)
 
 @Composable
 fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
@@ -209,16 +209,44 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                     enabled = mayTransmit,
                 ) { Text("Auto CQ") }
                 OutlinedButton(
-                    onClick = { heartbeat(viewModel, Js8Protocol.command("hbnow"), heartbeatOk) { refusal = it } },
+                    onClick = {
+                        if (!heartbeatOk) {
+                            refusal = "Heartbeats on the North America net stay below a 1000 Hz offset."
+                            return@OutlinedButton
+                        }
+                        confirm = Js8Confirm(
+                            "HB now",
+                            "The radio will send a heartbeat now.",
+                            Js8Protocol.command("hbnow"),
+                        )
+                    },
                     enabled = mayTransmit && heartbeatOk,
                 ) { Text("HB now") }
                 OutlinedButton(
-                    onClick = { heartbeat(viewModel, Js8Protocol.command("hb"), heartbeatOk) { refusal = it } },
-                    enabled = mayTransmit && heartbeatOk,
+                    onClick = {
+                        if (!heartbeatOk) {
+                            refusal = "Heartbeats on the North America net stay below a 1000 Hz offset."
+                            return@OutlinedButton
+                        }
+                        val line = Js8Protocol.command("hb")
+                        if (status?.heartbeat == true) {
+                            transmit(viewModel, line, enabling = false) { refusal = it }
+                        } else {
+                            confirm = Js8Confirm("Heartbeat", "The radio will answer heartbeats.", line)
+                        }
+                    },
+                    enabled = heartbeatOk && (if (status?.heartbeat == true) held else mayTransmit),
                 ) { Text(if (status?.heartbeat == true) "HB on" else "HB") }
                 OutlinedButton(
-                    onClick = { transmit(viewModel, Js8Protocol.command("auto")) { refusal = it } },
-                    enabled = mayTransmit,
+                    onClick = {
+                        val line = Js8Protocol.command("auto")
+                        if (status?.auto == true) {
+                            transmit(viewModel, line, enabling = false) { refusal = it }
+                        } else {
+                            confirm = Js8Confirm("Auto", "The radio will answer on its own.", line)
+                        }
+                    },
+                    enabled = if (status?.auto == true) held else mayTransmit,
                 ) { Text(if (status?.auto == true) "Auto on" else "Auto") }
                 OutlinedButton(
                     onClick = { operate(viewModel, Js8Protocol.command("hold")) { refusal = it } },
@@ -257,16 +285,16 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                 OutlinedButton(
                     onClick = {
                         val hz = txOffset ?: return@OutlinedButton
-                        operate(viewModel, Js8Protocol.txFreq(hz - 10)) { refusal = it }
+                        refusal = viewModel.moveJs8Offset(hz - 10)
                     },
-                    enabled = held && txOffset != null,
+                    enabled = held && role.txAllowed && txOffset != null,
                 ) { Text("−10") }
                 OutlinedButton(
                     onClick = {
                         val hz = txOffset ?: return@OutlinedButton
-                        operate(viewModel, Js8Protocol.txFreq(hz + 10)) { refusal = it }
+                        refusal = viewModel.moveJs8Offset(hz + 10)
                     },
-                    enabled = held && txOffset != null,
+                    enabled = held && role.txAllowed && txOffset != null,
                 ) { Text("+10") }
             }
             // The field's own minimum is 280 dp. In the landscape column that
@@ -284,9 +312,9 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                 OutlinedButton(
                     onClick = {
                         val hz = offsetText.toIntOrNull() ?: return@OutlinedButton
-                        operate(viewModel, Js8Protocol.txFreq(hz)) { refusal = it }
+                        refusal = viewModel.moveJs8Offset(hz)
                     },
-                    enabled = held && offsetText.isNotEmpty(),
+                    enabled = held && role.txAllowed && offsetText.isNotEmpty(),
                     modifier = Modifier.defaultMinSize(minWidth = 64.dp),
                 ) { Text("Set", maxLines = 1, softWrap = false) }
             }
@@ -339,7 +367,7 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     confirm = null
-                    transmit(viewModel, pending.line) { refusal = it }
+                    transmit(viewModel, pending.line, pending.enabling) { refusal = it }
                 }) { Text("Transmit", color = RfGuru.red) }
             },
             dismissButton = {
@@ -372,23 +400,14 @@ private fun operate(viewModel: RadioViewModel, line: String, refusal: (String?) 
     refusal(if (viewModel.js8Operate(line)) null else "Take control before this.")
 }
 
-/** HB and HB now. The GhostNet window is decided by the caller before this runs. */
-private fun heartbeat(
+/** A transmit word. [enabling] is false when the tap turns a transmission off. */
+private fun transmit(
     viewModel: RadioViewModel,
     line: String,
-    inWindow: Boolean,
+    enabling: Boolean = true,
     refusal: (String?) -> Unit,
 ) {
-    if (!inWindow) {
-        refusal("Heartbeats on the North America net stay below a 1000 Hz offset.")
-        return
-    }
-    transmit(viewModel, line, refusal)
-}
-
-/** A transmit word. The reason comes back when the line was not sent. */
-private fun transmit(viewModel: RadioViewModel, line: String, refusal: (String?) -> Unit) {
-    refusal(viewModel.js8Transmit(line))
+    refusal(viewModel.js8Transmit(line, enabling))
 }
 
 @Composable

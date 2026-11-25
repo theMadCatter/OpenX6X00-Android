@@ -186,9 +186,9 @@ fun Ft8Screen(viewModel: RadioViewModel, onJs8: () -> Unit = {}) {
                             if (steps == 0) return@detectHorizontalDragGestures
                             dragCarry -= steps * stepPx
                             val next = (current + steps * 10).coerceIn(span.lowHz, span.highHz)
-                            hz = next
-                            val line = PanelCommands.ft8("txfreq", next.toString())
-                            refusal = if (viewModel.ft8Operate(line)) null else "Take control before this."
+                            val why = viewModel.moveFt8Offset(next)
+                            if (why == null) hz = next
+                            refusal = why
                             faded = true
                             fadeTick++
                         },

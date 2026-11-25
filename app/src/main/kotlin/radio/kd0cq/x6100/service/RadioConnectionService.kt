@@ -146,6 +146,8 @@ class RadioConnectionService : LifecycleService() {
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         if (prefs.read()) {
+            rig.stopDigitalEngines()
+            rig.ptt.releaseTune()
             rig.ptt.release()
         } else {
             prefs.forgetEndpoint()

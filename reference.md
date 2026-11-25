@@ -719,3 +719,33 @@ The README placeholder in the previous request never expanded, so that pass used
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: the tasks were up to date, and the last executed run is still **242 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device.
+
+## The transmit side, for a public release
+
+**What I found**
+
+Voice PTT was already the real lease. Radio microphone: `key PTT 1 HOLD`, renewed every second, `key PTT 0` on release. Phone microphone: `trx:0,true,tci;` and `trx:0,false;`. Release, a dropped link, lost control, a lost transmit flag, a refused write, backgrounding and service stop already unkeyed both. The press did not require Take control, and it did not look at the band.
+
+FT8, FT4 and FT2 already sent `ft8 cq`, `ft8 txcall`, `ft8 reply` and `ft8 auto`, asked first, and required Take control. Turning one off skipped the band check. Nothing sent `ft8 stop` when the phone left or the link was closed on purpose. The TX offset was `ft8 txfreq` with no band check on the offset being asked for.
+
+JS8 already sent `js8 send`, `js8 cq`, `js8 autocq`, `js8 hb`, `js8 hbnow`, `js8 auto` and `js8 txfreq`. Send, CQ and Auto CQ asked. Heartbeat, HB now and Auto did not, and the band check ran on the off tap as well, so an illegal offset could leave Heartbeat or Auto on. `js8 txfreq` did not require the transmit flag and did not check the new offset. Nothing sent `js8 stop` on the way out.
+
+WeFax on the panel is `open|close|auto|cont|save|clear|plan|unplan` plus `wefax rows`. There is no transmit word. The radio can transmit a fax from its own screen. `set atu` enables the tuner and does not key. Tune is a separate lease the face did not send: `tune 1 HOLD`, the same line once a second, `tune 0` to stop. The radio drops it after 3 seconds without a renewal. `tune 0` from a client that does not own the tune stops any tune, so an `err tune` must not be answered with `tune 0`.
+
+`set pwr` is tenths of a watt. The face sent it for any operate session. FT8 and JS8 clamp the radio to 7.0 W while they transmit (`TX_PLAYER_MAX_PWR_W` in `tx_player.h`) and then restore the power. There is no panel command for that cap. 30 m is 200 W PEP and 60 m is 100 W ERP. ERP depends on the antenna. `set pwr` is not ERP.
+
+The band check was US Advanced data only, including a continuous 5.3515–5.3665 MHz span that is not the 60 m allocation. Voice, Tune, power and the TX offset did not use it. No class was stored.
+
+**What changed**
+
+- Setup stores a US license class. Nothing is chosen until the operator picks Technician, General, Advanced or Extra. The check starts on, so every transmission is refused until a class is chosen. The off switch keeps Take control, the transmit flag, the question before keying, and the unkey, and it shows a warning for operators outside the United States.
+- The tables are 47 CFR 97.301 and 97.305. The whole signal has to sit in one segment. 60 m is the five 2.8 kHz channels. Voice uses the mode. FT8, FT4, FT2 and JS8 are data whatever the knob says. Tune is a carrier at the dial. Turning a digital function off does not need a legal offset.
+- PTT and Tune both require Take control, operate, the transmit flag and the band check before the first line. The hold is the question. Tune sends `tune 1 HOLD` / `tune 0` and renews. A refused `tune 0` is retried. An `err tune` cancels the renewal and does not send `tune 0`.
+- `ft8 stop` and `js8 stop` go out when the screen goes away, the service stops, the task is swiped away, control is given back after this session held it, or the session loses operate or the transmit flag. A refused stop is retried. A finger leaving PTT does not stop a digital engine.
+- JS8 Heartbeat, HB now and Auto ask before they start. Turning Heartbeat or Auto off does not ask and does not need the band. Moving either TX offset checks the offset being asked for, requires the transmit flag, and does not key.
+- Power requires Take control and the transmit flag. Above 7.0 W the line is still sent, and the face says FT8 and JS8 will transmit at 7 W.
+- README has a Transmitting section. `docs/tx-checklist.md` is the on-air list. No radio was keyed from this pass.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **255 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device. The firmware still cannot start a WeFax transmission from the panel, and it has no remote command for the 7 W digital cap, the 200 W 30 m PEP limit, or the 100 W 60 m ERP limit. A link that dies before the stop line is written can leave an FT8 or JS8 transmission running on the radio until it is stopped there. PTT and Tune fall over on the radio's own lease a few seconds after the renewals stop.
