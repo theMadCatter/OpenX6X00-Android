@@ -2,10 +2,35 @@
 // Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
+import java.io.File
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+}
+
+// Release signing is optional. A properties file supplies storeFile,
+// storePassword, keyAlias and keyPassword. The path comes from
+// OPENX6X00_RELEASE_PROPERTIES, the Gradle property of the same name
+// (or openx6x00.release.properties, typically in ~/.gradle/gradle.properties),
+// or ~/.android-release/openx6x00-release.properties. If none of those
+// files exist, assembleRelease still works and just does not sign.
+// Looked up outside android { } so File is not shadowed by the AGP java { } block.
+val releasePropsFile: File? = run {
+    val fromEnv = System.getenv("OPENX6X00_RELEASE_PROPERTIES")
+    val fromGradle = providers.gradleProperty("OPENX6X00_RELEASE_PROPERTIES")
+        .orElse(providers.gradleProperty("openx6x00.release.properties"))
+        .orNull
+    val fallback = File(System.getProperty("user.home"), ".android-release/openx6x00-release.properties")
+    listOfNotNull(fromEnv, fromGradle)
+        .map { File(it) }
+        .firstOrNull { it.isFile }
+        ?: fallback.takeIf { it.isFile }
+}
+val releaseProps: Properties? = releasePropsFile?.let { propsFile ->
+    Properties().apply { propsFile.inputStream().use { load(it) } }
 }
 
 android {
@@ -17,12 +42,26 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.0-alpha"
+    }
+
+    if (releaseProps != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseProps.getProperty("storeFile"))
+                storePassword = releaseProps.getProperty("storePassword")
+                keyAlias = releaseProps.getProperty("keyAlias")
+                keyPassword = releaseProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseProps != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

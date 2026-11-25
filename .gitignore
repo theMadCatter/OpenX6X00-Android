@@ -16,3 +16,10 @@ local.properties
 .idea/
 *.iml
 .DS_Store
+
+# Release signing — never commit keys or their passwords
+*.jks
+*.keystore
+openx6x00-release.properties
+keystore.properties
+*keystore*.properties
