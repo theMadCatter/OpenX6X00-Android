@@ -23,25 +23,35 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.mandatorySystemGestures
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.tappableElement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import radio.kd0cq.x6100.digital.Js8Look
 import radio.kd0cq.x6100.digital.waterfallTicks
 import radio.kd0cq.x6100.digital.waterfallX
@@ -69,28 +79,41 @@ fun DigitalSplit(
     /** Share of a wide window given to the picture. The list gets the rest. */
     pictureShare: Float = 0.42f,
 ) {
-    // navigationBarsPadding is the system bar, on every side. The JS8 route's
-    // host often consumed that inset already, and this one is then zero. The
-    // control block still keeps 12 dp under its scroll and 8 dp at its end,
-    // because the GhostNet reminder was the line the bar shaved, and Set was
-    // the control the first landscape frame shaved on the right.
-    BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
+    // The wide window sizes the control scroll from the column it is given.
+    // Portrait pads for the system navigation bar and does not cap the
+    // controls, so the net reminder is in the column at its full height.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = RadioFace.wideWindow(maxWidth.value, maxHeight.value)
+        // Both orientations keep the system bar, including the gesture floor,
+        // under the column. The landscape budget subtracts that same pad, so
+        // Set is above the bar on the first frame rather than under it.
+        val bar = navigationBottomInset()
         if (wide) {
-            Column(Modifier.fillMaxSize().padding(8.dp)) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .padding(bottom = bar),
+            ) {
                 header()
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     Box(Modifier.weight(pictureShare).fillMaxHeight().background(Color.Black)) {
                         picture()
                     }
-                    Column(Modifier.weight(1f - pictureShare).fillMaxHeight().padding(start = 8.dp)) {
-                        list(Modifier.weight(1f).fillMaxWidth())
-                        Column(controlBlock(168.dp)) { controls() }
-                    }
+                    WideControls(
+                        pictureShare = pictureShare,
+                        list = list,
+                        controls = controls,
+                    )
                 }
             }
         } else {
-            Column(Modifier.fillMaxSize().padding(8.dp)) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(8.dp)
+                    .padding(bottom = bar),
+            ) {
                 header()
                 if (pictureGrows) {
                     Box(
@@ -104,30 +127,98 @@ fun DigitalSplit(
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .height(100.dp)
+                            .height(Js8Chrome.PORTRAIT_PICTURE_DP.dp)
                             .background(Color.Black),
                     ) { picture() }
                     list(Modifier.weight(1f).fillMaxWidth())
                 }
-                Column(controlBlock(220.dp)) { controls() }
+                PortraitControls(controls)
             }
         }
     }
 }
 
 /**
- * The control block under the list. The height cap is the phone's. The
- * scroll is inside that cap. The bar inset, then 12 dp, sits outside the
- * scroll, so the last line ends above the system navigation bar. The end
- * pad keeps the last control off the right edge.
+ * The right column. The scroll viewport is [Js8Chrome.controlCapDp]: at
+ * least the offset row when the column can hold it, and never taller than
+ * the column. Set is in that first viewport. The GhostNet block and the
+ * message are under it and scroll.
  */
 @Composable
-private fun controlBlock(maxHeight: androidx.compose.ui.unit.Dp): Modifier =
-    Modifier
-        .navigationBarsPadding()
-        .padding(bottom = 12.dp, end = 8.dp)
-        .heightIn(max = maxHeight)
-        .verticalScroll(rememberScrollState())
+private fun RowScope.WideControls(
+    pictureShare: Float,
+    list: @Composable (Modifier) -> Unit,
+    controls: @Composable () -> Unit,
+) {
+    BoxWithConstraints(
+        Modifier
+            .weight(1f - pictureShare)
+            .fillMaxHeight()
+            .padding(start = 8.dp, end = 4.dp),
+    ) {
+        val cap = Js8Chrome.controlCapDp(maxHeight.value).dp
+        Column(Modifier.fillMaxHeight()) {
+            list(Modifier.weight(1f).fillMaxWidth())
+            Column(
+                Modifier
+                    .heightIn(max = cap)
+                    .verticalScroll(rememberScrollState()),
+            ) { controls() }
+        }
+    }
+}
+
+/**
+ * Portrait controls. [Js8Chrome.PORTRAIT_CONTROL_MAX_DP] is 0, so there is
+ * no cap: the North America reminder wraps at its own height above the
+ * navigation pad the column already applied. A positive cap would be the
+ * old block that ended on the bar.
+ */
+@Composable
+private fun PortraitControls(controls: @Composable () -> Unit) {
+    if (Js8Chrome.PORTRAIT_CONTROL_MAX_DP > 0) {
+        Column(
+            Modifier
+                .heightIn(max = Js8Chrome.PORTRAIT_CONTROL_MAX_DP.dp)
+                .verticalScroll(rememberScrollState()),
+        ) { controls() }
+    } else {
+        Column(Modifier.fillMaxWidth()) { controls() }
+    }
+}
+
+/**
+ * Bottom inset for the portrait column.
+ *
+ * Compose's navigation-bar padding on this route was 0, because the host
+ * had consumed it, and the S24 still drew the gesture bar there. This reads
+ * the navigation bar, the mandatory gesture inset and the tappable element,
+ * from Compose and from the root view, and [ScreenBars.bottomDp] keeps the
+ * gesture floor when every one of those is 0.
+ */
+@Composable
+private fun navigationBottomInset(): Dp {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    LaunchedEffect(view) { ViewCompat.requestApplyInsets(view) }
+    val composePx = maxOf(
+        WindowInsets.navigationBars.getBottom(density),
+        WindowInsets.mandatorySystemGestures.getBottom(density),
+        WindowInsets.tappableElement.getBottom(density),
+    )
+    val root = ViewCompat.getRootWindowInsets(view)
+    val rawPx = if (root == null) {
+        0
+    } else {
+        maxOf(
+            root.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom,
+            root.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures()).bottom,
+            root.getInsets(WindowInsetsCompat.Type.tappableElement()).bottom,
+        )
+    }
+    val reported = with(density) { maxOf(composePx, rawPx).toDp().value }
+    return ScreenBars.bottomDp(reported).dp
+}
 
 /** A call drawn on the lane over the waterfall, at its audio offset. */
 data class LaneMark(val hz: Int, val label: String, val color: Color)

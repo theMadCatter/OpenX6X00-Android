@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -356,7 +357,22 @@ private fun LandscapeHeader(
     ) {
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
+                // Pair sits outside the scrolling pills, then the icons, then the
+                // clock with the same gap the portrait header uses. A scrolled
+                // pill used to draw under the clock.
+                InfoPills(
+                    state, canOperate, audio, viewModel, onPlaceholder, onPair,
+                    Modifier.weight(1f),
+                    pinPair = true,
+                )
+                if (!canOperate) {
+                    Pill(
+                        "Pair",
+                        on = true,
+                        onClick = onPair,
+                        modifier = Modifier.padding(start = RadioFace.PORTRAIT_PAIR_GAP_DP.dp),
+                    )
+                }
                 StatusIconRow(onPlaceholder)
                 val battery = state?.battery
                 val percent = RadioFace.batteryOnFace(battery)
@@ -375,7 +391,10 @@ private fun LandscapeHeader(
                         fontSize = 12.sp,
                     )
                 }
-                UtcClock(fontSize = 11.sp)
+                UtcClock(
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(start = RadioFace.PORTRAIT_CLOCK_GAP_DP.dp),
+                )
                 if (stationGrid.isNotBlank()) {
                     Text(stationGrid, color = RfGuru.goldText, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
@@ -522,9 +541,30 @@ private fun PortraitOperating(
     // keys stay on screen on a 1080×2400 phone.
     val stationGrid by viewModel.stationGrid.collectAsState()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
-            ClockBlock(state?.battery, onPlaceholder, stationGrid = stationGrid)
+        // The pills scroll and clip. Pair is a sibling of the clock, with
+        // 8 dp between them. On the 1080 px-wide header the clock used to
+        // sit on the Pair pill.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            InfoPills(
+                state, canOperate, audio, viewModel, onPlaceholder, onPair,
+                Modifier.weight(1f),
+                pinPair = true,
+            )
+            if (!canOperate) {
+                Pill(
+                    "Pair",
+                    on = true,
+                    onClick = onPair,
+                    modifier = Modifier.padding(start = RadioFace.PORTRAIT_PAIR_GAP_DP.dp),
+                )
+            }
+            ClockBlock(
+                state?.battery,
+                onPlaceholder,
+                modifier = Modifier.padding(start = RadioFace.PORTRAIT_CLOCK_GAP_DP.dp),
+                stationGrid = stationGrid,
+                clockSp = RadioFace.PORTRAIT_CLOCK_SP.sp,
+            )
         }
         StatusIconRow(onPlaceholder)
         // This is the space above the needle meter. Measuring it, then giving the row that
@@ -633,10 +673,11 @@ private fun InfoPills(
     onPlaceholder: (String) -> Unit,
     onPair: () -> Unit,
     modifier: Modifier = Modifier,
+    pinPair: Boolean = false,
 ) {
     val modeCount by viewModel.modes.collectAsState()
     Row(
-        modifier.horizontalScroll(rememberScrollState()),
+        modifier.clipToBounds().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -659,7 +700,7 @@ private fun InfoPills(
         Pill("ATT", on = state?.attenuatorOn == true, onClick = { if (canOperate) viewModel.toggle(PanelSettings.ATT, state?.attenuatorOn != true) })
         Pill("ATU", on = state?.atuOn == true, onClick = { if (canOperate) viewModel.toggle(PanelSettings.ATU, state?.atuOn != true) })
         Pill("SPL", on = false, placeholder = true, onClick = { onPlaceholder("Split / TX shift") })
-        if (!canOperate) {
+        if (!canOperate && !pinPair) {
             Pill("Pair", on = true, onClick = onPair)
         }
         if (audio) {

@@ -749,3 +749,27 @@ The band check was US Advanced data only, including a continuous 5.3515–5.3665
 `ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **255 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
 
 This pass was not re-shot on a device. The firmware still cannot start a WeFax transmission from the panel, and it has no remote command for the 7 W digital cap, the 200 W 30 m PEP limit, or the 100 W 60 m ERP limit. A link that dies before the stop line is written can leave an FT8 or JS8 transmission running on the radio until it is stopped there. PTT and Tune fall over on the radio's own lease a few seconds after the renewals stop.
+
+## S24 leftovers on the JS8 footer, the offset row, and the header clock
+
+**What I found**
+
+The device check of e4662dc on an S24 Ultra, 1080 px wide, left three layout clips.
+
+1. The GhostNet footer, the North America net reminder, was still cut by the system navigation bar in portrait. `navigationBarsPadding()` on that route was 0: the host had already consumed the Compose inset, and a 12 dp pad under a 220 dp control cap did not clear the gesture bar. The reminder was the line at the bottom of that cap.
+
+2. JS8 landscape still clipped the bottom of Set and the Offset field on the first frame. The control scroll was capped at 168 dp, and the field was a second row under the TX step keys, so the bottom of that row started below the viewport.
+
+3. The header UTC clock, at 14 sp, overlapped the Pair pill. On a 1080 px-wide portrait header (450 dpi, 384 dp, 372 dp after the page padding) the clock and the last pill shared the same edge. The pill row could also draw past its slot into the clock.
+
+**What changed**
+
+- Portrait JS8 no longer caps the controls (`PORTRAIT_CONTROL_MAX_DP` is 0). The reminder and the settings note wrap at full height. The column pads its bottom from the navigation bar, the mandatory gesture inset and the tappable element, read from Compose and from the root view. An inset under 48 dp is raised to 48 dp. The JS8 route does not also take the host's navigation pad, so the two do not stack. The status-bar pad stays on the host.
+- Landscape puts −10, the field, +10 and Set on one row. The control viewport is `controlCapDp` of the real column: at least the Take control row, the command row and that offset row when the column can hold them. The wide column also pads for the navigation bar, which is the 48 dp the budget subtracts. On the S24's 384 dp short side the column budget is 240 dp and the viewport is taller than the 160 dp stack, so Set is on the first frame and above the bar. The wide header uses a 32 dp Back key and one status line.
+- Pair is pinned outside the scrolling pills. The portrait clock is 12 sp, with 8 dp between Pair and the clock, and the pill row clips. The landscape clock keeps 11 sp and the same gap.
+
+`thePortraitClockClearsThePairPillOnTheS24`, `s24LandscapeShowsSetOnTheFirstFrame`, `thePortraitReminderClearsTheNavigationBar` and `anEmptyNavigationInsetStillClearsTheGestureBar` lock those budgets.
+
+`ANDROID_HOME=$HOME/android-sdk ./gradlew testDebugUnitTest assembleDebug --offline` after this: **260 tests, 0 failures, 0 errors**. `assembleDebug`: BUILD SUCCESSFUL.
+
+This pass was not re-shot on a device.
