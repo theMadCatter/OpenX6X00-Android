@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -260,6 +261,33 @@ fun StatusIconRow(onPlaceholder: (String) -> Unit, modifier: Modifier = Modifier
     }
 }
 
+/**
+ * The header clock. It used to be the literal "--:--:--", because nothing on
+ * the state line is a time. [RadioFace.utcClock] is the phone's UTC. It ticks
+ * once a second. A tap does not open the pending-firmware note: this is a
+ * clock, not a control the radio is missing.
+ */
+@Composable
+fun UtcClock(modifier: Modifier = Modifier, fontSize: androidx.compose.ui.unit.TextUnit = 14.sp) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+    val text = RadioFace.utcClock(now)
+    Text(
+        text,
+        color = RfGuru.mute,
+        fontFamily = Mono,
+        fontSize = fontSize,
+        maxLines = 1,
+        softWrap = false,
+        modifier = modifier.semantics { contentDescription = "UTC $text" },
+    )
+}
+
 @Composable
 fun ClockBlock(
     batteryPercent: Int?,
@@ -267,20 +295,27 @@ fun ClockBlock(
     modifier: Modifier = Modifier,
     stationGrid: String = "",
 ) {
+    // -1 is the radio's "no pack reading". Hiding it is the face. A missing
+    // state (nothing connected) still says so, with an em dash, so a blank
+    // header is not mistaken for a radio that reported external power.
+    val percent = RadioFace.batteryOnFace(batteryPercent)
     Column(modifier = modifier, horizontalAlignment = Alignment.End) {
-        Text(
-            "--:--:--",
-            color = RfGuru.mute,
-            fontFamily = Mono,
-            fontSize = 14.sp,
-            modifier = Modifier.clickable { onPlaceholder("Clock") }.semantics { contentDescription = "Clock. $PENDING_FIRMWARE" },
-        )
-        Text(
-            if (batteryPercent == null) "—%" else "$batteryPercent%",
-            color = RfGuru.goldText,
-            fontFamily = Mono,
-            fontSize = 13.sp,
-        )
+        UtcClock()
+        if (percent != null) {
+            Text(
+                "$percent%",
+                color = RfGuru.goldText,
+                fontFamily = Mono,
+                fontSize = 13.sp,
+            )
+        } else if (batteryPercent == null) {
+            Text(
+                "—%",
+                color = RfGuru.goldText,
+                fontFamily = Mono,
+                fontSize = 13.sp,
+            )
+        }
         Text(
             "~ —",
             color = RfGuru.mute,

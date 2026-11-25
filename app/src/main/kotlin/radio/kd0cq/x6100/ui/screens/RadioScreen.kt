@@ -72,6 +72,7 @@ import radio.kd0cq.x6100.ui.face.SoftkeyBar
 import radio.kd0cq.x6100.ui.face.SpectrumStack
 import radio.kd0cq.x6100.ui.face.StatusIconRow
 import radio.kd0cq.x6100.ui.face.ClockBlock
+import radio.kd0cq.x6100.ui.face.UtcClock
 import radio.kd0cq.x6100.ui.theme.RfGuru
 
 @Composable
@@ -345,19 +346,23 @@ private fun LandscapeHeader(
                 InfoPills(state, canOperate, audio, viewModel, onPlaceholder, onPair, Modifier.weight(1f))
                 StatusIconRow(onPlaceholder)
                 val battery = state?.battery
-                Text(
-                    if (battery == null) "—%" else "$battery%",
-                    color = RfGuru.goldText,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                )
-                Text(
-                    "--:--",
-                    color = RfGuru.mute,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    modifier = Modifier.clickable { onPlaceholder("Clock") },
-                )
+                val percent = RadioFace.batteryOnFace(battery)
+                if (percent != null) {
+                    Text(
+                        "$percent%",
+                        color = RfGuru.goldText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                    )
+                } else if (battery == null) {
+                    Text(
+                        "—%",
+                        color = RfGuru.goldText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                    )
+                }
+                UtcClock(fontSize = 11.sp)
                 if (stationGrid.isNotBlank()) {
                     Text(stationGrid, color = RfGuru.goldText, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }

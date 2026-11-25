@@ -326,6 +326,34 @@ object RadioFace {
     fun wideWindow(widthDp: Float, heightDp: Float): Boolean =
         widthDp.isFinite() && heightDp.isFinite() && widthDp > 0f && heightDp > 0f && widthDp > heightDp
 
+    /**
+     * The percent to paint, or null when the face should leave the battery off.
+     *
+     * Before this, the header printed `bat` as a percent even when the radio
+     * sent -1, so external power (and the moment before the base has measured
+     * the pack) read "-1%". `radio_get_battery` in radio.h is the percent on
+     * the radio's own screen, and -1 in exactly those two cases. A value
+     * outside 0..100 is that sentinel. 0 stays, because an empty pack is a
+     * reading. The state line is the only place the percent arrives. TCI
+     * does not send one.
+     */
+    fun batteryOnFace(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
+
+    /**
+     * The clock the header shows.
+     *
+     * The panel `state` line has no time field, and TCI has no time command.
+     * `clk? MS` exists, and the radio answers with its own unix milliseconds,
+     * but that answer is step 1 of setting the radio's clock from the phone.
+     * It is not a status field the face is pushed. The header therefore uses
+     * the phone's clock, in UTC, so the digits move and they are not the
+     * radio's local zone.
+     */
+    fun utcClock(epochMs: Long): String =
+        java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss'Z'")
+            .withZone(java.time.ZoneOffset.UTC)
+            .format(java.time.Instant.ofEpochMilli(epochMs))
+
     fun frequencyTextSp(widthDp: Float, heightDp: Float, text: String): Float {
         val advance = 0.62f
         val chars = text.length.coerceAtLeast(1) + 1.5f

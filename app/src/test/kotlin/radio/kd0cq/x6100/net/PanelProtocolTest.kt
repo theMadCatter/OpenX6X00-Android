@@ -57,6 +57,10 @@ class PanelProtocolTest {
         assertEquals(2, s.stepIndex)
         assertTrue(s.atuOn)
         assertEquals(78, s.battery)
+        // radio_get_battery returns -1 on external power, or before a reading.
+        val external = """state {"freq":14074000,"mode":3,"bat":-1}"""
+        val none = (PanelProtocol.parseLine(external) as PanelEvent.State).state
+        assertEquals(-1, none.battery)
         assertFalse(s.transmitting)
         assertFalse(s.freqLocked)
         // A line that does not carry the key tone keeps the defaults.

@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -64,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import radio.kd0cq.x6100.digital.GhostNet
@@ -178,7 +180,14 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
             } else if (blocked != null) {
                 Text(blocked, color = RfGuru.red, fontSize = 12.sp)
             }
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // The padding is inside the scroll, after horizontalScroll, so the
+            // last key can travel clear of the right edge. A padding outside
+            // the scroll only narrows the viewport, and the last letters of
+            // the Show key were still cut off once the row had been swiped.
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(end = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 OutlinedButton(onClick = { operate(viewModel, Js8Protocol.command("open")) { refusal = it } }, enabled = held) {
                     Text("Open")
                 }
@@ -226,7 +235,16 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                 OutlinedButton(onClick = {
                     val next = Js8Look.Show.entries[(show.ordinal + 1) % Js8Look.Show.entries.size]
                     showName = next.name
-                }) { Text("Show: ${Js8Look.showName(show)}") }
+                }) {
+                    Text(
+                        Js8Look.showButton(show),
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        softWrap = true,
+                        lineHeight = 14.sp,
+                        fontSize = 12.sp,
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -251,13 +269,17 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                     enabled = held && txOffset != null,
                 ) { Text("+10") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // The field's own minimum is 280 dp. In the landscape column that
+            // minimum pushed Set past the right edge, including on the first
+            // frame after a rotation, and the column clipped it. The field
+            // takes what is left. Set keeps its own width.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(
                     value = offsetText,
                     onValueChange = { offsetText = it.filter { ch -> ch.isDigit() }.take(5) },
                     label = { Text("Offset Hz", color = RfGuru.dim) },
                     singleLine = true,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).defaultMinSize(minWidth = 0.dp),
                 )
                 OutlinedButton(
                     onClick = {
@@ -265,7 +287,8 @@ fun Js8Screen(viewModel: RadioViewModel, onBack: () -> Unit) {
                         operate(viewModel, Js8Protocol.txFreq(hz)) { refusal = it }
                     },
                     enabled = held && offsetText.isNotEmpty(),
-                ) { Text("Set") }
+                    modifier = Modifier.defaultMinSize(minWidth = 64.dp),
+                ) { Text("Set", maxLines = 1, softWrap = false) }
             }
             if (show == Js8Look.Show.GHOSTNET) {
                 Text(GhostNet.REMINDER, color = RfGuru.text, fontSize = 12.sp)

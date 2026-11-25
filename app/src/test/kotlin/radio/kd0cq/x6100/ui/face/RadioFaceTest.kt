@@ -34,6 +34,18 @@ class RadioFaceTest {
     }
 
     @Test
+    fun theHeaderClockIsPhoneUtcAndAMissingBatteryIsHidden() {
+        // 2026-11-25 14:03:05Z. The state line has no time, so this is the phone.
+        val ms = java.time.Instant.parse("2026-11-25T14:03:05Z").toEpochMilli()
+        assertEquals("14:03:05Z", RadioFace.utcClock(ms))
+        assertEquals(78, RadioFace.batteryOnFace(78))
+        assertEquals(0, RadioFace.batteryOnFace(0))
+        assertNull(RadioFace.batteryOnFace(-1))
+        assertNull(RadioFace.batteryOnFace(101))
+        assertNull(RadioFace.batteryOnFace(null))
+    }
+
+    @Test
     fun theWindowAspectPicksTheOperatingFace() {
         assertTrue(RadioFace.wideWindow(800f, 360f))
         assertFalse(RadioFace.wideWindow(360f, 800f))

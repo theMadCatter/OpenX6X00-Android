@@ -512,6 +512,17 @@ object Js8Look {
     }
 
     /**
+     * The Show key's two lines.
+     *
+     * One line, "Show: GhostNet", was wider than the end of the scrolling
+     * command row. After a sideways swipe the last letters sat on the right
+     * edge and the row clipped them. The name is its own line, the same way
+     * the radio stacks a key's title over its value, so the key is as wide
+     * as the longer line and that line is a single word.
+     */
+    fun showButton(show: Show): String = "Show\n${showName(show)}"
+
+    /**
      * The status line the radio puts above the waterfall: the switches that
      * can transmit on their own, where we are, the speed, and how many
      * decodes are held. The radio also prints its UTC clock and the time
