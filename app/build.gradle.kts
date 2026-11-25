@@ -1,10 +1,11 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -50,6 +51,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.security.crypto)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

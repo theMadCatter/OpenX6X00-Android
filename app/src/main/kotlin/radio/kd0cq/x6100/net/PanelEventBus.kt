@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.net
@@ -53,12 +53,36 @@ class PanelEventBus(scope: CoroutineScope) {
         replay = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+    private val appPictures = MutableSharedFlow<PanelEvent>(
+        replay = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
+     * WeFax scan lines. A one-deep slot would keep only the newest line and the
+     * chart would be a single stripe. Thirty-two is enough for the UI to fall
+     * a moment behind. Past that, the oldest line is dropped, which is what
+     * the radio already does when a client has no room.
+     */
+    private val faxPictures = MutableSharedFlow<PanelEvent>(
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 
     /** Control, state, role, errors, and every other text line. Never dropped for a frame. */
     val events: Flow<PanelEvent> = text.asSharedFlow()
 
     /** The latest spectrum or screen frame. Older frames are replaced, not queued. */
     val frames: Flow<PanelEvent> = pictures.asSharedFlow()
+
+    /**
+     * The latest JS8 or FT8 app-waterfall line. Its own slot, so it neither evicts a
+     * spectrum frame nor waits behind one, and neither of them can push `ctl` out.
+     */
+    val appFrames: Flow<PanelEvent> = appPictures.asSharedFlow()
+
+    /** WeFax scan lines, in order, dropped only when this buffer is already full. */
+    val faxFrames: Flow<PanelEvent> = faxPictures.asSharedFlow()
 
     private val queued = AtomicLong(0)
 
@@ -116,6 +140,8 @@ class PanelEventBus(scope: CoroutineScope) {
         if (generation != epoch.get()) return
         when (event) {
             is PanelEvent.Spectrum, is PanelEvent.Screen -> pictures.tryEmit(event)
+            is PanelEvent.AppWaterfall -> appPictures.tryEmit(event)
+            is PanelEvent.WeFaxRow -> faxPictures.tryEmit(event)
             else -> enqueue(generation, event)
         }
     }

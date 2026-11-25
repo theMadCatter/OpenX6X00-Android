@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.ui.screens
@@ -43,7 +43,7 @@ fun PairingScreen(viewModel: RadioViewModel, onDone: () -> Unit) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Pair with the radio", style = MaterialTheme.typography.headlineSmall)
+        Text("Pair with the radio", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         Text(
             "Press Pair on the radio's Remote page, type the six digits it shows, and this app keeps the " +
                 "token it answers with so the next connection needs no code.",

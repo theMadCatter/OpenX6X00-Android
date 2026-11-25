@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.core
@@ -192,10 +192,19 @@ class PttLeaseStateMachine(
         if (state != State.Requesting && state != State.Keyed) {
             // Releasing or idle. The first up-command may have been the one the socket refused
             // (a lost renewal used to stop here without ever sending it). Ask again while the
-            // caller still has a socket, then keep the reason for the screen.
+            // caller still has a socket.
+            //
+            // The reason is for the screen only when a carrier was actually in play. An idle
+            // machine that owes nothing — the app left the screen, or the activity rotated —
+            // must not announce "went to the background" for a key that was never down.
+            val announce = carrierMayBeUp || state == State.Releasing
             deliverUnkeyLocked()
-            this.reason = reason
-            listener(state, reason)
+            if (announce) {
+                this.reason = reason
+                listener(state, reason)
+            } else {
+                listener(state, null)
+            }
             return
         }
         letGoLocked(reason, sendRelease = true)

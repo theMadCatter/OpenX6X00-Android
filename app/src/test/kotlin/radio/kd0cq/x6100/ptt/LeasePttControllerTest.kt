@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.ptt
@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import radio.kd0cq.x6100.core.ManualClock
@@ -138,6 +139,29 @@ class LeasePttControllerTest {
         assertTrue(c.onAir)
         c.onTciFrame(chrono())
         assertEquals(TciTxStateMachine.State.Keyed, c.txState.value)
+    }
+
+    @Test
+    fun backgroundingWhileIdleDoesNotAnnounceAnInterruption() {
+        // onStop used to call this on every rotation. The machines were idle, but their listeners
+        // still published the reason, and the radio screen painted it in red.
+        val c = controller()
+        c.wentToBackground()
+        assertNull(c.refusal.value)
+        assertTrue(panel.lines.isEmpty())
+        assertTrue(tci.lines.isEmpty())
+        assertFalse(c.onAir)
+    }
+
+    @Test
+    fun backgroundingWhileKeyedUnkeysAndSaysWhy() {
+        val c = controller()
+        c.press()
+        assertTrue(c.onAir)
+        c.wentToBackground()
+        assertEquals("this app went to the background", c.refusal.value)
+        assertFalse(c.onAir)
+        assertTrue(panel.lines.any { it.contains("PTT 0") })
     }
 
     @Test

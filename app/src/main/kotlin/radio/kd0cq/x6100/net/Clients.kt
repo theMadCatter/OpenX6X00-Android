@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.net
@@ -54,6 +54,21 @@ interface PanelClient : Closeable {
      * control or PTT line with it.
      */
     val frames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
+     * The JS8 and FT8 app waterfall, also conflated to the latest. It is not on [frames]:
+     * those two pictures would replace each other, and a spectrum flood would hide every
+     * JS8 line. It is not on [events] either, so a row of bins cannot sit in front of `ctl`.
+     */
+    val appFrames: kotlinx.coroutines.flow.Flow<PanelEvent>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
+     * WeFax scan lines. Not on [frames] and not on [events]: a chart is a
+     * stream of rows, and one of them must not sit in front of `ctl`.
+     */
+    val faxFrames: kotlinx.coroutines.flow.Flow<PanelEvent>
         get() = kotlinx.coroutines.flow.emptyFlow()
 
     /** The link's phase, and the last word about why it is not up. */

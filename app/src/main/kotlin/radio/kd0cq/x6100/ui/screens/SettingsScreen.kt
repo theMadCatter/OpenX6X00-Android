@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 
@@ -16,14 +16,29 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import radio.kd0cq.x6100.ui.face.PENDING_FIRMWARE
+import radio.kd0cq.x6100.ui.face.RadioFace
+import radio.kd0cq.x6100.ui.theme.RfGuru
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.provider.Settings
+import radio.kd0cq.x6100.digital.FccPart97
+import radio.kd0cq.x6100.digital.LicenseClass
 import radio.kd0cq.x6100.net.LinkPhase
+import radio.kd0cq.x6100.service.BackgroundPreference
 import radio.kd0cq.x6100.ui.RadioViewModel
 
 /**
@@ -31,7 +46,7 @@ import radio.kd0cq.x6100.ui.RadioViewModel
  * here without mDNS. Nothing on this screen is a guess: every line comes from the radio itself.
  */
 @Composable
-fun SettingsScreen(viewModel: RadioViewModel) {
+fun SettingsScreen(viewModel: RadioViewModel, onBack: () -> Unit = {}) {
     val phase by viewModel.phase.collectAsState()
     val tciPhase by viewModel.tciPhase.collectAsState()
     val hello by viewModel.hello.collectAsState()
@@ -45,9 +60,15 @@ fun SettingsScreen(viewModel: RadioViewModel) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Setup", style = MaterialTheme.typography.headlineSmall)
+        TextButton(onClick = onBack) { Text("Back", color = RfGuru.gold) }
+        Text("Setup", style = MaterialTheme.typography.headlineSmall, color = RfGuru.gold)
 
         Text("Link", style = MaterialTheme.typography.titleMedium)
+        BackgroundSwitch()
+        LicenseSection(viewModel)
+        StationToggles(viewModel)
+        FieldOptions()
+        AlertOptions()
         Line("panel", phase.name.lowercase())
         Line("tci", tciPhase.name.lowercase())
         Line("radio", endpoint?.let { "${it.name} ${it.host}:${it.panelPort} / ${it.tciPort}" } ?: "-")
@@ -90,6 +111,15 @@ fun SettingsScreen(viewModel: RadioViewModel) {
             }
         }
 
+        Text("Radio menus the Panel link does not carry", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+        Text(
+            "These are on the radio. $PENDING_FIRMWARE, so the buttons on the face only name them.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        RadioFace.pendingFeatures().forEach { feature ->
+            Line(feature.group, feature.name)
+        }
+
         Text("What the audio path does not do", style = MaterialTheme.typography.titleMedium)
         Text(
             "The receiver plays 24 kHz mono through the phone's speaker or whatever the phone itself " +
@@ -100,6 +130,230 @@ fun SettingsScreen(viewModel: RadioViewModel) {
             style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+/**
+ * Keep the receiver up with the screen off. On until the operator turns it off.
+ *
+ * The system can still freeze a background app under battery optimization. This
+ * does not ask for an exemption on its own. The button opens the system list,
+ * where the operator can allow it if the radio drops out in Doze.
+ */
+@Composable
+private fun BackgroundSwitch() {
+    val context = LocalContext.current
+    val preference = remember { BackgroundPreference(context) }
+    var on by remember { mutableStateOf(preference.read()) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Run in background", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+            Text(
+                "Keep the radio link and the receiver playing when the screen is off. " +
+                    "PTT and Tune are let go, and FT8 and JS8 are told to stop.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(
+            checked = on,
+            onCheckedChange = { next ->
+                on = next
+                preference.write(next)
+            },
+        )
+    }
+    TextButton(onClick = {
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+    }) { Text("Battery optimization", color = RfGuru.gold) }
+}
+
+/**
+ * Phone location and the radio clock. The toggles are stored. The commands are not sent:
+ * remote_server.c has no `pos` and no `clk`, and answers `err unknown command`.
+ * A granted location still fills the header grid from the phone.
+ */
+/**
+ * Country and license class for the band-edge check.
+ *
+ * Before this, every digital transmission was checked as US Advanced data and
+ * nothing else was checked at all. The default is no class and the check on,
+ * so the radio cannot be keyed until a class is chosen. Turning the check off
+ * is for an operator outside the United States. It does not remove Take
+ * control, the transmit flag, or the unkey.
+ */
+@Composable
+private fun LicenseSection(viewModel: RadioViewModel) {
+    val choice by viewModel.license.collectAsState()
+    Text("Transmitting", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+    Text(
+        "Country: United States. This table is 47 CFR 97.301 and 97.305. " +
+            "No class is selected until you pick one, and transmitting stays blocked until then.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ClassButton("Not chosen", choice.license == null) { viewModel.chooseLicense(null) }
+    }
+    LicenseClass.entries.chunked(2).forEach { pair ->
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            pair.forEach { license ->
+                ClassButton(license.label, choice.license == license) { viewModel.chooseLicense(license) }
+            }
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Check US band edges", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "Off is for an operator outside the United States. Read the warning before you turn it off.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(checked = choice.check, onCheckedChange = viewModel::setBandCheck)
+    }
+    if (!choice.check) {
+        Text(FccPart97.CHECK_OFF_WARNING, color = RfGuru.red, style = MaterialTheme.typography.bodySmall)
+    }
+    Text(
+        "FT8 and JS8 transmissions are limited to ${FccPart97.DIGITAL_TX_CAP_WATTS.toInt()} W by the radio. " +
+            "30 m is ${FccPart97.THIRTY_METER_PEP_WATTS} W PEP and 60 m is ${FccPart97.SIXTY_METER_ERP_WATTS} W ERP. " +
+            "This radio is below the PEP figure, and ERP depends on the antenna, so those two are not a power command.",
+        style = MaterialTheme.typography.bodySmall,
+        color = RfGuru.dim,
+    )
+}
+
+@Composable
+private fun ClassButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = onClick) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick) { Text(label) }
+    }
+}
+
+@Composable
+private fun StationToggles(viewModel: RadioViewModel) {
+    val context = LocalContext.current
+    val prefs = remember { radio.kd0cq.x6100.station.StationPrefs(context) }
+    var send by remember { mutableStateOf(prefs.sendLocation()) }
+    var clock by remember { mutableStateOf(prefs.syncClock()) }
+    var note by remember { mutableStateOf(PENDING_FIRMWARE) }
+    val permission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions(),
+    ) { granted ->
+        if (granted.values.any { it }) note = readPhoneGrid(context, viewModel) ?: PENDING_FIRMWARE
+    }
+    Text("Phone and radio", style = MaterialTheme.typography.titleMedium, color = RfGuru.gold)
+    Text(note, style = MaterialTheme.typography.bodySmall, color = RfGuru.mute)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("Send phone location to radio", modifier = Modifier.weight(1f))
+        Switch(checked = send, onCheckedChange = { on ->
+            send = on
+            prefs.writeSend(on)
+            if (on) {
+                permission.launch(arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                ))
+            }
+        })
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("Sync radio clock", modifier = Modifier.weight(1f))
+        Switch(checked = clock, onCheckedChange = { on ->
+            clock = on
+            prefs.writeClock(on)
+        })
+    }
+    OutlinedButton(onClick = {
+        val choice = radio.kd0cq.x6100.station.ClockSync.choose(clock, radio.kd0cq.x6100.station.FIRMWARE_ACCEPTS_POS_AND_CLK)
+        note = if (choice == radio.kd0cq.x6100.station.SyncChoice.PENDING) PENDING_FIRMWARE else "Clock command is ready"
+    }) { Text("Sync") }
+}
+
+private fun readPhoneGrid(context: android.content.Context, viewModel: RadioViewModel): String? {
+    val fine = context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val coarse = context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    if (!fine && !coarse) return null
+    val manager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
+    val provider = if (fine) android.location.LocationManager.GPS_PROVIDER else android.location.LocationManager.NETWORK_PROVIDER
+    val fix = runCatching { manager.getLastKnownLocation(provider) }.getOrNull() ?: return null
+    val now = radio.kd0cq.x6100.log.LatLon(fix.latitude, fix.longitude)
+    val prefs = radio.kd0cq.x6100.station.StationPrefs(context)
+    val choice = radio.kd0cq.x6100.station.PositionSync.choose(
+        enabled = true,
+        firmware = true,
+        last = prefs.lastFix(),
+        now = now,
+    )
+    if (choice != radio.kd0cq.x6100.station.SyncChoice.SEND) return viewModel.stationGrid.value
+    prefs.writeLastFix(now)
+    val grid = radio.kd0cq.x6100.log.Maidenhead.encode(now)
+    viewModel.noteStationGrid(grid)
+    // The socket is not written. FIRMWARE_ACCEPTS_POS_AND_CLK is false.
+    return grid
+}
+
+/** Sunlight face and which S-meter to paint. Both are local. The radio is not asked. */
+@Composable
+private fun FieldOptions() {
+    val context = LocalContext.current
+    val sun by radio.kd0cq.x6100.ui.face.FaceChoices.sunlight.collectAsState()
+    val meter by radio.kd0cq.x6100.ui.face.FaceChoices.meter.collectAsState()
+    Text("Field display", style = MaterialTheme.typography.titleMedium)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("Sunlight, high contrast", color = RfGuru.text)
+        Switch(
+            checked = sun,
+            onCheckedChange = { radio.kd0cq.x6100.ui.face.FaceChoices.writeSun(context, it) },
+        )
+    }
+    Text("S-meter", color = RfGuru.dim, style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        radio.kd0cq.x6100.ui.face.MeterStyle.entries.forEach { style ->
+            TextButton(onClick = { radio.kd0cq.x6100.ui.face.FaceChoices.writeMeter(context, style) }) {
+                Text(style.name.lowercase(), color = if (style == meter) RfGuru.gold else RfGuru.dim)
+            }
+        }
+    }
+}
+
+/** Low battery from `bat`, high SWR from the `t` meter. The shade never sends PTT. */
+@Composable
+private fun AlertOptions() {
+    val context = LocalContext.current
+    val prefs = remember { radio.kd0cq.x6100.service.AlertPrefs(context) }
+    var battery by remember { mutableStateOf(prefs.battery().toString()) }
+    var swr by remember { mutableStateOf(prefs.swr().toString()) }
+    Text("Alerts", style = MaterialTheme.typography.titleMedium)
+    Text("Battery percent, and SWR while transmitting. Default 2.5:1.", color = RfGuru.dim, style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.material3.OutlinedTextField(
+            value = battery,
+            onValueChange = { battery = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Battery %") },
+            modifier = Modifier.weight(1f),
+        )
+        androidx.compose.material3.OutlinedTextField(
+            value = swr,
+            onValueChange = { swr = it.filter { ch -> ch.isDigit() || ch == '.' } },
+            label = { Text("SWR") },
+            modifier = Modifier.weight(1f),
+        )
+    }
+    TextButton(onClick = {
+        battery.toIntOrNull()?.let { prefs.writeBattery(it) }
+        swr.toDoubleOrNull()?.let { prefs.writeSwr(it) }
+    }) { Text("Save alert marks", color = RfGuru.gold) }
 }
 
 @Composable

@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 //
@@ -35,6 +35,7 @@ dependencyResolutionManagement {
 plugins {
     id("com.android.application") version "9.4.1" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.20" apply false
+    id("com.google.devtools.ksp") version "2.2.20-2.0.2" apply false
 }
 
 rootProject.name = "OpenX6X00-Android"

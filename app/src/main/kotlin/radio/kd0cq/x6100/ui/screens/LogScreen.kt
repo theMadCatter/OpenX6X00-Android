@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 
@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import radio.kd0cq.x6100.log.Qso
 import radio.kd0cq.x6100.net.PanelCommands
 import radio.kd0cq.x6100.ui.RadioViewModel
 import java.util.concurrent.ThreadLocalRandom
@@ -57,7 +58,8 @@ fun LogScreen(viewModel: RadioViewModel) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Log", style = MaterialTheme.typography.headlineSmall)
+        Text("Log", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+        QrzSection(viewModel, call, { call = it }, { name = it }, { qth = it }, { grid = it })
         Text(
             "role ${role.role.wire}  ·  the radio writes its own day log",
             style = MaterialTheme.typography.bodySmall,
@@ -77,10 +79,26 @@ fun LogScreen(viewModel: RadioViewModel) {
             onClick = {
                 // The id is ours and random: the radio binds the receipt to the QSO's text, so a retry
                 // of the same QSO is answered and one with other fields is refused as a "conflict".
+                // The local row is the copy that keeps the time. The radio line has no time column.
                 val id = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE / 2)
                 lastId = id
                 lastText = fields.joinToString("|")
-                viewModel.logQsoWithId(id, fields)
+                val radio = viewModel.state.value
+                viewModel.saveLoggedQso(
+                    Qso(
+                        call = call,
+                        freqHz = radio?.freqHz ?: 0,
+                        mode = radio?.modeLabel ?: "",
+                        timeUtcMs = System.currentTimeMillis(),
+                        rstSent = sent,
+                        rstRcvd = received,
+                        name = name,
+                        qth = qth,
+                        grid = grid,
+                        country = "",
+                        radioLogId = id,
+                    ),
+                )
             },
         ) { Text("Log this QSO") }
         if (lastId != 0L) {

@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.service
@@ -12,11 +12,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import radio.kd0cq.x6100.audio.AndroidAudioPipeline
+import radio.kd0cq.x6100.core.DigitalUnkey
 import radio.kd0cq.x6100.net.RadioLink
 import radio.kd0cq.x6100.net.RadioLinks
 import radio.kd0cq.x6100.net.LinkPhase
 import radio.kd0cq.x6100.ptt.HandlerPttScheduler
 import radio.kd0cq.x6100.ptt.LeasePttController
+import radio.kd0cq.x6100.ptt.SystemClockPttClock
 
 /**
  * The app's one set of moving parts: the link, the audio devices, and the key.
@@ -37,6 +39,7 @@ class Rig internal constructor(
     val link: RadioLink,
     val audio: AndroidAudioPipeline,
     val ptt: LeasePttController,
+    private val digital: DigitalUnkey,
     private val scheduler: HandlerPttScheduler,
 ) {
 
@@ -48,7 +51,19 @@ class Rig internal constructor(
      * gone is a light on the phone and a promise broken. The timers go last: a release that has already
      * been asked for has nothing left for them to do.
      */
+    /**
+     * `ft8 stop` and `js8 stop` while the panel socket can still take them.
+     *
+     * PTT and Tune are separate leases. A finger leaving PTT does not call this.
+     * Leaving the screen, stopping the service, losing the transmit flag, or
+     * giving control back does. WeFax has no transmit word on the panel.
+     */
+    fun stopDigitalEngines() = digital.stop()
+
     fun shutdown(reason: String) {
+        // The digital engines first, then the key and Tune, while the sockets
+        // are still open. A stop the socket refuses is retried by [digital].
+        stopDigitalEngines()
         ptt.failSafe(reason)
         audio.release()
         scheduler.clear()
@@ -75,7 +90,18 @@ object RadioRigs {
         )
         link.audio.delegate = audio
         val scheduler = HandlerPttScheduler()
-        val ptt = LeasePttController(link.panel, link.tci, audio.microphone, scheduler)
+        val digital = DigitalUnkey(
+            send = { line -> link.panel.sendChecked(line) },
+            clock = SystemClockPttClock,
+            scheduler = scheduler,
+        )
+        val ptt = LeasePttController(
+            panel = link.panel,
+            tci = link.tci,
+            microphone = audio.microphone,
+            scheduler = scheduler,
+            onAuthorityLost = { digital.stop() },
+        )
         audio.onChrono = { frame -> ptt.onTciFrame(frame) }
 
         // The rig's own watchers. They are never cancelled: a service that stops and starts again must
@@ -97,6 +123,6 @@ object RadioRigs {
                 }
             }
         }
-        return Rig(link, audio, ptt, scheduler)
+        return Rig(link, audio, ptt, digital, scheduler)
     }
 }

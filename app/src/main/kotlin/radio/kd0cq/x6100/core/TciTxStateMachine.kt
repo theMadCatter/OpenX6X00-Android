@@ -1,5 +1,5 @@
 // OpenX6X00-Android - open companion app for the Xiegu X6100 running OpenX6X00
-// Copyright (C) 2026 Chris Fink KD0CQ (theMadCatter)
+// Copyright (C) 2026 KD0CQ (theMadCatter)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Written by Revolta via OpenCode.
 package radio.kd0cq.x6100.core
@@ -304,10 +304,17 @@ class TciTxStateMachine(
         if (state == State.Idle) {
             // Idle is also where a lost frame leaves us when its unkey was refused. Ask again
             // before handing the microphone back: the unkey is the line the radio acts on.
+            // A session that never keyed has nothing to tell the screen. Announcing the reason
+            // anyway is how a rotation painted "this app went to the background" in red.
+            val announce = carrierMayBeUp
             deliverUnkeyLocked()
             mic.stop()
-            this.reason = reason
-            listener(State.Idle, reason)
+            if (announce) {
+                this.reason = reason
+                listener(State.Idle, reason)
+            } else {
+                listener(State.Idle, null)
+            }
             return
         }
         letGoLocked(reason, sendUnkey = true)
